@@ -1,7 +1,7 @@
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde_json::json;
 
@@ -44,7 +44,10 @@ impl IntoResponse for Error {
             Error::Config(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
             Error::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "IO error".to_string()),
             Error::Serialization(_) => (StatusCode::BAD_REQUEST, "Invalid JSON".to_string()),
-            Error::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string()),
+            Error::Internal => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_string(),
+            ),
         };
 
         let body = Json(json!({

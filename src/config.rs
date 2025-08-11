@@ -33,8 +33,7 @@ impl Default for Config {
                 log_level: env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
             },
             models: ModelConfig {
-                cache_dir: env::var("MODEL_CACHE_DIR")
-                    .unwrap_or_else(|_| "./models".to_string()),
+                cache_dir: env::var("MODEL_CACHE_DIR").unwrap_or_else(|_| "./models".to_string()),
                 max_concurrent_requests: env::var("MAX_CONCURRENT_REQUESTS")
                     .unwrap_or_else(|_| "10".to_string())
                     .parse()
