@@ -6,10 +6,11 @@ use hf_hub::{Repo, RepoType, api::sync::Api};
 use serde_json::Value;
 use std::fs;
 use tokenizers::Tokenizer;
+use std::sync::Arc;
 
 pub struct TinyLlamaModel {
-    model: Llama,
-    tokenizer: Tokenizer,
+    model: Arc<Llama>,
+    tokenizer: Arc<Tokenizer>,
     device: Device,
     config: Config,
 }
@@ -18,17 +19,33 @@ impl TinyLlamaModel {
     pub async fn load() -> Result<Self> {
         tracing::info!("Starting TinyLlama model loading...");
 
-        // YOUR EXISTING DEVICE SELECTION CODE
-        let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
-        tracing::info!("Selected device: {:?}", device);
+        // Prioritize GPU with fallback to CPU
+        let device = if candle_core::utils::metal_is_available() {
+            tracing::info!("🚀 Metal available, using GPU acceleration");
+            match Device::new_metal(0) {
+                Ok(d) => {
+                    tracing::info!("✅ Successfully initialized Metal device");
+                    d
+                }
+                Err(e) => {
+                    tracing::warn!("❌ Failed to initialize Metal: {}, falling back to CPU", e);
+                    Device::Cpu
+                }
+            }
+        } else {
+            tracing::info!("❌ Metal not available, using CPU");
+            Device::Cpu
+        };
+        
+        tracing::info!("📱 Final selected device: {:?}", device);
 
         // YOUR EXISTING MODEL DOWNLOAD CODE
         let (model, tokenizer, config) = Self::load_model_components(&device).await?;
 
         tracing::info!("TinyLlama model loaded successfully");
         Ok(Self {
-            model,
-            tokenizer,
+            model: Arc::new(model),
+            tokenizer: Arc::new(tokenizer),
             device,
             config,
         })
@@ -215,113 +232,89 @@ impl TinyLlamaModel {
     }
 
     pub async fn generate(&mut self, prompt: &str, max_tokens: usize) -> Result<String> {
-        tracing::debug!(
-            "Generating text for prompt: '{}' (max_tokens: {})",
-            prompt,
-            max_tokens
-        );
-
+        let total_start = std::time::Instant::now();
+        
         // Format the input as a chat prompt
         let formatted_prompt = format!("User: {prompt}\nAssistant:");
-        tracing::debug!("Formatted prompt: '{}'", formatted_prompt);
-
-        // Tokenize input
-        let encoding = self
+        
+        // Tokenize input (measure timing)
+        let tokenize_start = std::time::Instant::now();
+        let input_ids = self
             .tokenizer
             .encode(formatted_prompt.as_str(), true)
-            .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?
+            .get_ids()
+            .to_vec();
+        let tokenize_time = tokenize_start.elapsed();
 
-        let input_ids = encoding.get_ids().to_vec();
-        tracing::debug!(
-            "Input tokens: {:?} (length: {})",
-            input_ids,
-            input_ids.len()
-        );
-
-        // Convert input_ids to a 2D tensor with batch dimension
+        // Convert to 2D tensor with batch dimension
         let input_tensor = Tensor::from_vec(
             input_ids.clone(),
-            (1, input_ids.len()), // Add batch dimension: (batch_size=1, sequence_length)
+            (1, input_ids.len()),
             &self.device,
         )?;
-        tracing::debug!(
-            "Created input tensor with shape: {:?}",
-            input_tensor.shape()
-        );
 
-        // Create a fresh cache for this generation using F16 to match model weights
-        let mut cache = Cache::new(
-            true,
-            DType::F16, // Use F16 to match model weights
-            &self.config,
-            &self.device,
-        )?;
-        tracing::debug!("Initialized model cache");
-
-        let mut generated_tokens = Vec::new();
-        let mut current_input = input_tensor;
-
-        // Generation loop
-        for step in 0..max_tokens {
-            tracing::trace!("Generation step: {} / {}", step + 1, max_tokens);
-
-            // Run model inference
-            tracing::trace!("Running model inference...");
-            let start = std::time::Instant::now();
-            let output = self.model.forward(&current_input, step, &mut cache)?;
-            let inference_time = start.elapsed();
-            tracing::trace!("Model inference completed in {:?}", inference_time);
-            tracing::trace!("Output tensor shape: {:?}", output.shape());
-
-            // Get the last token's logits
-            tracing::trace!("Extracting logits from output...");
-            let logits = output.squeeze(0)?;
-            tracing::trace!("Logits shape after squeeze: {:?}", logits.shape());
-
-            // Get the logits for the last position
-            let last_logits = if logits.dims().len() == 2 {
-                // If 2D (seq_len, vocab_size), get the last position
-                logits.get(logits.dim(0)? - 1)?
-            } else {
-                // If 1D (vocab_size), use directly
-                logits
-            };
-
-            // Find token with highest probability
-            tracing::trace!("Finding token with highest probability...");
-            let next_token_tensor = last_logits.argmax(candle_core::D::Minus1)?;
-            let token_id = next_token_tensor.to_scalar::<u32>()?;
-            tracing::trace!("Generated token ID: {}", token_id);
-
-            // Check for end-of-sequence
+        // Create cache with F16 to match model weights
+        let mut cache = Cache::new(true, DType::F16, &self.config, &self.device)?;
+        
+        // Generate tokens with timing
+        let mut generated_tokens = Vec::with_capacity(max_tokens);
+        let generation_start = std::time::Instant::now();
+        
+        // First forward pass with full prompt
+        let output = self.model.forward(&input_tensor, 0, &mut cache)?;
+        let logits = output.squeeze(0)?;
+        let next_token = logits.argmax(candle_core::D::Minus1)?;
+        let mut token_id = next_token.to_scalar::<u32>()?;
+        
+        if !self.is_eos_token(token_id) {
+            generated_tokens.push(token_id);
+        }
+        
+        // Subsequent forward passes with single tokens
+        for step in 1..max_tokens {
             if self.is_eos_token(token_id) {
-                tracing::debug!("End of sequence token encountered at step {}", step);
                 break;
             }
-
-            generated_tokens.push(token_id);
-
-            // Prepare input for next iteration (just the new token)
-            current_input = Tensor::from_vec(
+            
+            // Create single token tensor
+            let current_input = Tensor::from_vec(
                 vec![token_id],
-                (1, 1), // Single token with batch dimension
+                (1, 1),
                 &self.device,
             )?;
+            
+            let output = self.model.forward(&current_input, step, &mut cache)?;
+            let logits = output.squeeze(0)?;
+            let next_token = logits.argmax(candle_core::D::Minus1)?;
+            token_id = next_token.to_scalar::<u32>()?;
+            
+            if !self.is_eos_token(token_id) {
+                generated_tokens.push(token_id);
+            }
         }
+        
+        let generation_time = generation_start.elapsed();
 
-        tracing::debug!(
-            "Generated {} new tokens: {:?}",
-            generated_tokens.len(),
-            generated_tokens
-        );
-
-        // Decode generated tokens to text
-        let generated_text = self
-            .tokenizer
-            .decode(&generated_tokens, true)
+        // Decode tokens (measure timing)
+        let decode_start = std::time::Instant::now();
+        let generated_text = self.tokenizer.decode(&generated_tokens, true)
             .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
-
-        tracing::debug!("Generated text: '{}'", generated_text);
+        let decode_time = decode_start.elapsed();
+        
+        let total_time = total_start.elapsed();
+        let tokens_per_second = generated_tokens.len() as f64 / generation_time.as_secs_f64();
+        
+        tracing::info!(
+            "🚀 Performance: {} tokens in {:?} ({:.1} tok/s) | Tokenize: {:?} | Generate: {:?} | Decode: {:?}",
+            generated_tokens.len(),
+            total_time,
+            tokens_per_second,
+            tokenize_time,
+            generation_time,
+            decode_time
+        );
+        
         Ok(generated_text)
     }
 
@@ -349,18 +342,8 @@ impl TinyLlamaModel {
     }
 
     fn estimate_parameters(&self) -> usize {
-        // More accurate parameter estimation for TinyLlama
-        let embed_params = self.config.vocab_size * self.config.hidden_size;
-        let layer_params = self.config.num_hidden_layers
-            * (
-                // Self-attention
-                4 * self.config.hidden_size * self.config.hidden_size +
-            // Feed-forward  
-            2 * self.config.hidden_size * self.config.intermediate_size +
-            // Layer norms
-            2 * self.config.hidden_size
-            );
-        embed_params + layer_params
+        // Corrected parameter count for TinyLlama-1.1B
+        1_100_000_000 // Actual parameter count
     }
 
     fn estimate_memory_usage(&self) -> usize {

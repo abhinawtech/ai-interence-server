@@ -1,4 +1,5 @@
-use ai_interence_server::api::{generate, health};
+use ai_interence_server::api::generate::generate_text;
+use ai_interence_server::api::health::health_check;
 use ai_interence_server::batching::{BatchConfig, BatchProcessor};
 use ai_interence_server::models::TinyLlamaModel;
 use axum::{
@@ -12,6 +13,10 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Set optimal thread count for M1
+    std::env::set_var("RAYON_NUM_THREADS", "4");  // M1 has 4 performance cores
+    std::env::set_var("TOKENIZERS_PARALLELISM", "false");
+
     // Load environment variables from .env file
     dotenv::dotenv().ok();
 
@@ -47,15 +52,23 @@ async fn main() -> anyhow::Result<()> {
         batch_config.max_queue_size
     );
 
-    // Initialize the TinyLlamaModel
-    tracing::info!("🤖 Loading TinyLlama model...");
-    let model = TinyLlamaModel::load().await?;
+    // Initialize the TinyLlamaModel 
+    tracing::info!("🚀 Loading TinyLlama model...");
+    let mut model = TinyLlamaModel::load().await?;
+    
+    // Warm up the model with a sample generation
+    tracing::info!("🔥 Warming up model with sample generation...");
+    let warmup_start = std::time::Instant::now();
+    let _warmup_result = model.generate("Hello", 5).await;
+    let warmup_time = warmup_start.elapsed();
+    tracing::info!("✅ Model warmed up in {:?}", warmup_time);
+    
     let shared_model = Arc::new(Mutex::new(model));
     tracing::info!("✅ TinyLlama model loaded successfully");
 
     // Initialize BatchProcessor
     tracing::info!("🔄 Initializing BatchProcessor...");
-    let batch_processor = Arc::new(BatchProcessor::new(batch_config.clone(), shared_model));
+    let batch_processor = Arc::new(BatchProcessor::new(batch_config.clone(), Arc::clone(&shared_model)));
     tracing::info!("✅ BatchProcessor initialized");
 
     // Start the batch processing loop in background task
@@ -67,12 +80,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Create the router with BatchProcessor state
     let app = Router::new()
-        .route("/health", get(health::health_check))
-        .route("/api/v1/generate", post(generate::generate_text))
-        .route("/api/v1/batch/status", get(generate::batch_status))
+        .route("/health", get(health_check))
+        .route("/api/v1/generate", post(generate_text))
         .with_state(Arc::clone(&batch_processor));
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    let port: u16 = std::env::var("PORT")
+        .unwrap_or_else(|_| "3000".to_string())
+        .parse()
+        .unwrap_or(3000);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!("🌐 Server starting on http://{}", addr);
     tracing::info!("📡 Available endpoints:");
     tracing::info!("  • GET  /health - Health check");
@@ -80,13 +96,11 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("  • GET  /api/v1/batch/status - Batch processing status");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-
-    // Setup graceful shutdown
     let server = axum::serve(listener, app);
 
     tracing::info!("✅ Server ready and accepting requests");
 
-    // Wait for shutdown signal
+    // Setup graceful shutdown
     tokio::select! {
         result = server => {
             if let Err(e) = result {
@@ -99,13 +113,8 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Graceful shutdown: abort the batch processing task
-    tracing::info!("⏳ Waiting for current batches to complete...");
+    // Clean shutdown of batch task
     batch_task.abort();
-
-    // Give some time for current requests to finish
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
     tracing::info!("👋 Server shutdown complete");
     Ok(())
 }
