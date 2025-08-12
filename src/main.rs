@@ -13,8 +13,15 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Set optimal thread count for M1
-    std::env::set_var("RAYON_NUM_THREADS", "4");  // M1 has 4 performance cores
+    // OPTIMIZATION: M1 Thread Configuration
+    // M1 has 4 performance cores + 4 efficiency cores (8 total)
+    // Set Rayon to use only performance cores for compute-intensive tasks
+    // Efficiency cores reserved for I/O and background tasks
+    std::env::set_var("RAYON_NUM_THREADS", "4");  // Use performance cores only
+    
+    // COMPATIBILITY: Disable tokenizer parallelism to avoid conflicts
+    // HuggingFace tokenizers can interfere with Tokio's async runtime
+    // Single-threaded tokenization is sufficient for our batch sizes
     std::env::set_var("TOKENIZERS_PARALLELISM", "false");
 
     // Load environment variables from .env file
@@ -29,16 +36,27 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("🚀 Starting AI Inference Server with Batching");
 
-    // Load batch configuration
+    // CONFIGURATION: Dynamic Batch Settings
+    // Environment variables allow runtime tuning without recompilation
+    // Defaults optimized for M1 MacBook Air with 8GB RAM
     let batch_config = BatchConfig {
+        // TUNING: Batch size balances latency vs throughput
+        // 4 requests = good balance for single-user scenarios
+        // 8+ requests = better for high-load production
         max_batch_size: std::env::var("BATCH_MAX_SIZE")
             .unwrap_or_else(|_| "4".to_string())
             .parse()
             .unwrap_or(4),
+            
+        // LATENCY: Wait time determines responsiveness
+        // 100ms = good balance, 50ms = more responsive, 200ms = higher throughput
         max_wait_time_ms: std::env::var("BATCH_MAX_WAIT_MS")
             .unwrap_or_else(|_| "100".to_string())
             .parse()
             .unwrap_or(100),
+            
+        // SCALABILITY: Queue size prevents memory exhaustion
+        // 50 requests = ~100KB memory overhead
         max_queue_size: std::env::var("BATCH_MAX_QUEUE_SIZE")
             .unwrap_or_else(|_| "50".to_string())
             .parse()
@@ -56,10 +74,13 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("🚀 Loading TinyLlama model...");
     let mut model = TinyLlamaModel::load().await?;
     
-    // Warm up the model with a sample generation
+    // OPTIMIZATION: Model Warm-up Strategy
+    // First inference is always slower due to Metal shader compilation
+    // GPU memory allocation, and KV cache initialization
+    // Warm-up eliminates "cold start" penalty for first user request
     tracing::info!("🔥 Warming up model with sample generation...");
     let warmup_start = std::time::Instant::now();
-    let _warmup_result = model.generate("Hello", 5).await;
+    let _warmup_result = model.generate("Hello", 5).await;  // Short prompt for quick warmup
     let warmup_time = warmup_start.elapsed();
     tracing::info!("✅ Model warmed up in {:?}", warmup_time);
     
@@ -100,7 +121,9 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("✅ Server ready and accepting requests");
 
-    // Setup graceful shutdown
+    // RELIABILITY: Graceful Shutdown Handling
+    // Ensures in-flight requests complete before termination
+    // Prevents data loss and provides clean resource cleanup
     tokio::select! {
         result = server => {
             if let Err(e) = result {
@@ -113,19 +136,26 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Clean shutdown of batch task
+    // CLEANUP: Batch Processor Termination
+    // Abort background task to prevent resource leaks
+    // In production, consider draining queue before shutdown
     batch_task.abort();
     tracing::info!("👋 Server shutdown complete");
     Ok(())
 }
 
+// RELIABILITY: Multi-Platform Shutdown Signal Handling
+// Handles both interactive (Ctrl+C) and system (SIGTERM) shutdown signals
+// Essential for containerized deployments and production environments
 async fn shutdown_signal() {
+    // Handle Ctrl+C for interactive shutdown during development
     let ctrl_c = async {
         signal::ctrl_c()
             .await
             .expect("failed to install Ctrl+C handler");
     };
 
+    // Handle SIGTERM for graceful container shutdown in production
     #[cfg(unix)]
     let terminate = async {
         signal::unix::signal(signal::unix::SignalKind::terminate())
@@ -134,9 +164,11 @@ async fn shutdown_signal() {
             .await;
     };
 
+    // Windows doesn't support SIGTERM, use pending future
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
+    // Wait for either signal to trigger shutdown
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
