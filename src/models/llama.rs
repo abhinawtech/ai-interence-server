@@ -45,7 +45,8 @@ impl TinyLlamaModel {
         
         tracing::info!("📱 Final selected device: {:?}", device);
 
-        // YOUR EXISTING MODEL DOWNLOAD CODE
+        // MODEL INITIALIZATION: Load TinyLlama components from HuggingFace Hub
+        // Downloads model weights, tokenizer, and configuration files
         let (model, tokenizer, config) = Self::load_model_components(&device).await?;
 
         tracing::info!("TinyLlama model loaded successfully");
@@ -58,7 +59,8 @@ impl TinyLlamaModel {
     }
 
     async fn load_model_components(device: &Device) -> Result<(Llama, Tokenizer, Config)> {
-        // YOUR EXISTING DOWNLOAD LOGIC (with async wrapper)
+        // ASYNC WRAPPER: Execute blocking model loading in separate thread
+        // Prevents blocking the async runtime during heavy I/O operations
         let device_clone = device.clone();
         let (model, tokenizer, config) =
             tokio::task::spawn_blocking(move || Self::load_model_sync(device_clone)).await??;
@@ -67,8 +69,8 @@ impl TinyLlamaModel {
     }
 
     fn load_model_sync(device: Device) -> Result<(Llama, Tokenizer, Config)> {
-        // PASTE YOUR EXISTING load_chat_model() LOGIC HERE
-        // But return (model, tokenizer, config) tuple instead of ChatModel
+        // SYNCHRONOUS MODEL LOADING: Heavy I/O operations for model initialization
+        // Downloads weights, tokenizer, and config from HuggingFace repository
 
         let api = Api::new()?;
         let repo = api.repo(Repo::with_revision(
@@ -98,7 +100,8 @@ impl TinyLlamaModel {
             config.num_hidden_layers
         );
 
-        // YOUR EXISTING WEIGHT LOADING LOGIC
+        // WEIGHT LOADING: Load model parameters from downloaded files
+        // Supports both SafeTensors (preferred) and PyTorch formats
         tracing::info!("Downloading model weights...");
         let weight_files = Self::download_weight_files(&repo)?;
         let vars = Self::load_weights(&weight_files, &device)?;
@@ -110,7 +113,8 @@ impl TinyLlamaModel {
     }
 
     fn parse_llama_config(config_json: &str) -> Result<Config> {
-        // YOUR EXISTING CONFIG PARSING CODE
+        // CONFIGURATION PARSING: Extract model architecture parameters
+        // Converts HuggingFace config.json to Candle's Config structure
         let config: Value = serde_json::from_str(config_json)?;
 
         let vocab_size = config["vocab_size"].as_u64().unwrap_or(32000) as usize;
@@ -165,7 +169,8 @@ impl TinyLlamaModel {
     }
 
     fn download_weight_files(repo: &hf_hub::api::sync::ApiRepo) -> Result<Vec<std::path::PathBuf>> {
-        // YOUR EXISTING WEIGHT FILE DISCOVERY LOGIC
+        // WEIGHT FILE DISCOVERY: Find model weight files in multiple formats
+        // Tries SafeTensors first, then falls back to PyTorch .bin files
         let possible_patterns = vec![
             vec!["model.safetensors".to_string()],
             (1..=2)
