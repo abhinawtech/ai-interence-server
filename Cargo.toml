@@ -6,9 +6,9 @@ edition = "2021"  # COMPATIBILITY: Rust 2021 edition provides stable feature set
 [dependencies]
 axum = "0.8.4"
 tokio = { version = "1.0", features = ["full"] }
-# OPTIMIZATION: M1-Specific Features for Maximum Performance
-# "metal" - Apple GPU acceleration via Metal Performance Shaders (2-3x speedup)
-# "accelerate" - Apple's optimized BLAS library for matrix operations (~40% faster)
+# OPTIMIZATION: Cross-platform GPU Acceleration Features
+# Metal for Apple Silicon, accelerate for optimized CPU operations
+# CUDA can be enabled separately with --features cuda if needed
 candle-core = { version = "0.9.1", features = ["metal", "accelerate"] }
 candle-nn = { version = "0.9.1", features = ["metal", "accelerate"] }
 candle-transformers = { version = "0.9.1", features = ["metal", "accelerate"] }
@@ -31,6 +31,10 @@ dotenv = "0.15"
 # rayon = "1.10.0"      # CONCURRENCY: Removed to avoid thread pool conflicts
                           # Rayon's work-stealing can interfere with Tokio's async executor
                           # Tokio handles parallelism for I/O, Candle handles compute parallelism
+
+[features]
+default = []
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 
 # PERFORMANCE: Aggressive Release Optimizations
 [profile.release]

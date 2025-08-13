@@ -19,27 +19,36 @@ impl TinyLlamaModel {
     pub async fn load() -> Result<Self> {
         tracing::info!("Starting TinyLlama model loading...");
 
-        // OPTIMIZATION: Metal GPU Acceleration Strategy
-        // Apple M1 has unified memory architecture - GPU and CPU share same memory pool
-        // This eliminates costly memory transfers between CPU and GPU, making Metal ideal for inference
-        // Metal Performance Shaders (MPS) provide optimized matrix operations for transformer models
-        let device = if candle_core::utils::metal_is_available() {
-            tracing::info!("🚀 Metal available, using GPU acceleration");
+        // OPTIMIZATION: GPU Acceleration Strategy
+        // Prioritize GPU acceleration when available (CUDA, Metal, etc.)
+        // GPU provides significant speedup for matrix operations in transformer models
+        let device = if candle_core::utils::cuda_is_available() {
+            tracing::info!("🚀 CUDA GPU available, using acceleration");
+            Device::new_cuda(0).unwrap_or_else(|e| {
+                tracing::warn!("❌ Failed to initialize CUDA: {}, trying Metal", e);
+                if candle_core::utils::metal_is_available() {
+                    Device::new_metal(0).unwrap_or_else(|e| {
+                        tracing::warn!("❌ Failed to initialize Metal: {}, using CPU", e);
+                        Device::Cpu
+                    })
+                } else {
+                    Device::Cpu
+                }
+            })
+        } else if candle_core::utils::metal_is_available() {
+            tracing::info!("🚀 Metal GPU available, using acceleration");
             match Device::new_metal(0) {
                 Ok(d) => {
                     tracing::info!("✅ Successfully initialized Metal device");
-                    // Metal device provides ~2-3x speedup over CPU for matrix multiplications
-                    // Especially beneficial for attention mechanisms and FFN layers
                     d
                 }
                 Err(e) => {
                     tracing::warn!("❌ Failed to initialize Metal: {}, falling back to CPU", e);
-                    // Graceful fallback ensures compatibility across different Mac configurations
                     Device::Cpu
                 }
             }
         } else {
-            tracing::info!("❌ Metal not available, using CPU");
+            tracing::info!("🖥️  Using CPU for inference");
             Device::Cpu
         };
         
@@ -220,7 +229,7 @@ impl TinyLlamaModel {
             tracing::info!("Loading safetensors weights...");
             unsafe {
                 // Memory-mapped loading: weights stay on disk, loaded on-demand
-                // Critical for M1's 8GB RAM constraint - avoids loading entire 2.2GB model into RAM
+                // Critical for memory-constrained systems - avoids loading entire 2.2GB model into RAM
                 Ok(VarBuilder::from_mmaped_safetensors(
                     weight_files,
                     DType::F16, // F16 uses half the memory of F32 with minimal quality loss
@@ -266,7 +275,7 @@ impl TinyLlamaModel {
         let tokenize_time = tokenize_start.elapsed();
 
         // OPTIMIZATION: Memory-Efficient Tensor Management
-        // Pre-allocate tensor on Metal device to avoid CPU-GPU memory transfers
+        // Pre-allocate tensor on GPU device to avoid CPU-GPU memory transfers
         // Batch dimension (1, seq_len) is required for transformer architecture
         let input_tensor = Tensor::from_vec(
             input_ids.clone(),

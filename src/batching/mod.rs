@@ -34,10 +34,9 @@ pub struct BatchConfig {
 impl Default for BatchConfig {
     fn default() -> Self {
         Self {
-            // OPTIMIZATION: Batch Size Tuning for M1 Architecture
-            // M1 has 8 CPU cores (4P+4E) and 7-8 GPU cores
-            // Batch size of 8 matches core count for optimal parallelism
-            // Larger batches would exceed memory bandwidth on 8GB system
+            // OPTIMIZATION: Batch Size Tuning for Performance
+            // Batch size of 8 provides good balance between latency and throughput
+            // Can be adjusted based on available system resources
             max_batch_size: 8,
             
             // PERFORMANCE: Reduced Latency Strategy
@@ -133,7 +132,9 @@ impl BatchProcessor {
     }
 
     async fn collect_batch(&self) -> Vec<BatchRequest> {
-        let mut batch = Vec::new();
+        // OPTIMIZATION: Pre-allocate vector with expected capacity
+        // Reduces memory reallocations during batch collection
+        let mut batch = Vec::with_capacity(self.config.max_batch_size);
         let batch_start = Instant::now();
 
         loop {
@@ -186,7 +187,8 @@ impl BatchProcessor {
             // PERFORMANCE: Optimized Single Request Path
             // Most API calls are single requests - optimize for this common case
             // Immediate processing avoids batch collection latency
-            let request = batch.into_iter().next().unwrap();
+            let request = batch.into_iter().next()
+                .expect("Single request batch should contain exactly one request");
             let request_start = Instant::now();
             
             // CONCURRENCY: Minimal Lock Duration

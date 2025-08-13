@@ -13,11 +13,12 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // OPTIMIZATION: M1 Thread Configuration
-    // M1 has 4 performance cores + 4 efficiency cores (8 total)
-    // Set Rayon to use only performance cores for compute-intensive tasks
-    // Efficiency cores reserved for I/O and background tasks
-    std::env::set_var("RAYON_NUM_THREADS", "4");  // Use performance cores only
+    // OPTIMIZATION: Thread Configuration
+    // Set reasonable thread count for compute-intensive tasks
+    // Can be overridden by environment variable if needed
+    if std::env::var("RAYON_NUM_THREADS").is_err() {
+        std::env::set_var("RAYON_NUM_THREADS", "4");
+    }
     
     // COMPATIBILITY: Disable tokenizer parallelism to avoid conflicts
     // HuggingFace tokenizers can interfere with Tokio's async runtime
@@ -38,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
 
     // CONFIGURATION: Dynamic Batch Settings
     // Environment variables allow runtime tuning without recompilation
-    // Defaults optimized for M1 MacBook Air with 8GB RAM
+    // Defaults optimized for typical development/production environments
     let batch_config = BatchConfig {
         // TUNING: Batch size balances latency vs throughput
         // 4 requests = good balance for single-user scenarios
@@ -75,8 +76,8 @@ async fn main() -> anyhow::Result<()> {
     let mut model = TinyLlamaModel::load().await?;
     
     // OPTIMIZATION: Model Warm-up Strategy
-    // First inference is always slower due to Metal shader compilation
-    // GPU memory allocation, and KV cache initialization
+    // First inference is always slower due to GPU shader compilation (if available)
+    // Memory allocation, and KV cache initialization
     // Warm-up eliminates "cold start" penalty for first user request
     tracing::info!("🔥 Warming up model with sample generation...");
     let warmup_start = std::time::Instant::now();

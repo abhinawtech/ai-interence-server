@@ -43,7 +43,7 @@ impl GenerateRequest {
         }
         
         // PERFORMANCE: Limit generation length to maintain responsiveness
-        // 512 tokens ≈ 25-40 seconds on M1, balances utility vs responsiveness
+        // 512 tokens ≈ 25-40 seconds on typical hardware, balances utility vs responsiveness
         if let Some(max_tokens) = self.max_tokens {
             if max_tokens == 0 || max_tokens > 512 {
                 return Err("max_tokens must be between 1 and 512".to_string());
@@ -79,7 +79,7 @@ pub async fn generate_text(
     // Non-blocking submission to batch queue for optimal throughput
     // Automatic batching provides 20-30% performance improvement
     let batch_response = batch_processor
-        .submit_request(request.prompt.clone(), max_tokens)
+        .submit_request(request.prompt, max_tokens) // OPTIMIZATION: Avoid clone by moving ownership
         .await
         .map_err(|e| {
             tracing::error!("Batch processing failed for request {}: {}", request_id, e);
@@ -112,7 +112,7 @@ pub async fn generate_text(
         version: "v1.0-batched".to_string(),    // Indicates batching optimization
         parameters: 110000000,                  // 1.1B parameter count for reference
         memory_mb: 2200,                       // F16 memory usage estimate
-        device: "Auto-detected".to_string(),   // Metal/CPU determined at runtime
+        device: "Auto-detected".to_string(),   // GPU/CPU determined at runtime
         vocab_size: 32000,                     // Tokenizer vocabulary size
         context_length: 2048,                  // Maximum sequence length
     };
