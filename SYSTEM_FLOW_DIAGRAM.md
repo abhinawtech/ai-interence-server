@@ -209,6 +209,7 @@ graph TB
         HTTP[HTTP API Endpoints]
         Health[Health Check]
         Batch[Batch Status]
+        SwapAPI[Model Swap API]
     end
     
     %% Application Layer
@@ -225,11 +226,20 @@ graph TB
         Stats[Performance Statistics]
     end
     
+    %% Model Management Layer
+    subgraph "Model Management"
+        ModelMgr[Model Version Manager]
+        AtomicSwap[Atomic Model Swap]
+        HealthCheck[Health Check System]
+        VersionControl[Version Control]
+    end
+    
     %% Model Layer
     subgraph "AI Model Layer"
-        ModelMgr[Model Manager]
         Tokenizer[HuggingFace Tokenizer]
-        LlamaModel[TinyLlama Model]
+        ActiveModel[Active Model]
+        ReadyModels[Ready Models Pool]
+        DeprecatedModels[Deprecated Models]
     end
     
     %% Infrastructure Layer
@@ -243,6 +253,7 @@ graph TB
     HTTP --> Router
     Health --> Router
     Batch --> Router
+    SwapAPI --> Router
     
     Router --> Middleware
     Middleware --> Validation
@@ -252,12 +263,137 @@ graph TB
     BatchProc --> Stats
     Queue --> ModelMgr
     
-    ModelMgr --> Tokenizer
-    ModelMgr --> LlamaModel
-    LlamaModel --> Metal
+    %% Model Management Flow
+    SwapAPI --> AtomicSwap
+    AtomicSwap --> ModelMgr
+    ModelMgr --> HealthCheck
+    ModelMgr --> VersionControl
     
+    %% Model Layer Connections
+    ModelMgr --> Tokenizer
+    ModelMgr --> ActiveModel
+    ModelMgr --> ReadyModels
+    ModelMgr --> DeprecatedModels
+    
+    %% Hot Swapping Flow
+    AtomicSwap -.->|Safety Check| HealthCheck
+    AtomicSwap -.->|Zero-Downtime Swap| ActiveModel
+    ReadyModels -.->|Promote to Active| ActiveModel
+    ActiveModel -.->|Demote to Deprecated| DeprecatedModels
+    
+    ActiveModel --> Metal
     Metal --> Memory
     Metal --> Cache
+```
+
+## 🔄 Hot Model Swapping Flow
+
+```mermaid
+graph TD
+    %% Swap Initiation
+    A[Client Swap Request] -->|POST /api/v1/models/swap| B[Atomic Swap Controller]
+    B --> C[Validate Target Model ID]
+    
+    %% Safety Validation Phase
+    C --> D{Safety Check}
+    D -->|GET /api/v1/models/{id}/swap/safety| E[Safety Validator]
+    
+    E --> F[Check Model Exists & Ready]
+    E --> G[Check No Concurrent Operations]
+    E --> H[Check System Health]
+    E --> I[Check Health Score ≥ 0.8]
+    E --> J[Check Target ≠ Current Active]
+    
+    %% Safety Decision
+    F --> K{All Checks Pass?}
+    G --> K
+    H --> K
+    I --> K
+    J --> K
+    
+    K -->|No| L[Return Safety Report: Unsafe]
+    K -->|Yes| M[Return Safety Report: Safe]
+    
+    %% Swap Execution Phase
+    M --> N[Begin Atomic Swap]
+    N --> O[Health Check with Retries]
+    
+    %% Health Check Loop
+    O --> P{Health Check Passed?}
+    P -->|No| Q[Retry Health Check]
+    Q --> R{Max Retries Reached?}
+    R -->|No| O
+    R -->|Yes| S[Swap Failed - Health Check]
+    
+    %% Successful Health Check
+    P -->|Yes| T[Acquire Model Manager Lock]
+    T --> U[Update Target Model Status: Active]
+    U --> V[Update Previous Model Status: Deprecated]
+    V --> W[Update Active Model Reference]
+    W --> X[Release Model Manager Lock]
+    
+    %% Zero-Downtime Guarantee
+    subgraph "Zero-Downtime Guarantee"
+        Y[Incoming Requests] --> Z{Swap in Progress?}
+        Z -->|Yes| AA[Queue Requests]
+        Z -->|No| BB[Process Normally]
+        AA -->|Swap Complete| BB
+    end
+    
+    %% Swap Completion
+    X --> CC[Calculate Swap Duration]
+    CC --> DD[Log Swap Success]
+    DD --> EE[Return Swap Result]
+    
+    %% Error Paths
+    S --> FF[Log Swap Failure]
+    FF --> GG[Return Error Response]
+    
+    %% Rollback Capability (Future)
+    subgraph "Rollback Support"
+        HH[Store Previous Active Model ID]
+        II[Enable Quick Rollback]
+        JJ[POST /api/v1/models/rollback]
+    end
+    
+    %% Response Flow
+    EE --> KK[HTTP 200 + Swap Details]
+    GG --> LL[HTTP 500 + Error Details]
+    L --> MM[HTTP 400 + Safety Issues]
+    
+    %% Styling
+    classDef swapProcess fill:#e3f2fd
+    classDef safetyCheck fill:#f3e5f5
+    classDef execution fill:#e8f5e8
+    classDef errorPath fill:#ffebee
+    classDef zeroDowntime fill:#fff3e0
+    
+    class A,B,C,N,T,U,V,W,X swapProcess
+    class D,E,F,G,H,I,J,K,M safetyCheck
+    class O,P,Q,CC,DD,EE execution
+    class L,S,FF,GG,LL errorPath
+    class Y,Z,AA,BB zeroDowntime
+```
+
+## 🔄 Model State Transition Diagram
+
+```mermaid
+stateDiagram-v2
+    [*] --> Loading : Load Model Request
+    Loading --> HealthCheck : Model Loaded
+    HealthCheck --> Ready : Health Check Passed
+    HealthCheck --> Failed : Health Check Failed
+    Ready --> Active : Atomic Swap
+    Active --> Deprecated : New Model Activated
+    Deprecated --> [*] : Cleanup/Removal
+    Failed --> [*] : Error Handling
+    
+    note right of Loading : Background loading with progress tracking
+    note right of HealthCheck : Automatic health validation (9-11 tok/s)
+    note right of Ready : Available for swapping
+    note right of Active : Currently serving requests
+    note right of Deprecated : Previous versions kept for rollback
+    note right of Failed : Load/health check failures
 ```
 
 ## 📊 Performance Metrics Flow
@@ -357,3 +493,6 @@ graph TD
 3. **KV Cache Management**: Efficient attention state reuse
 4. **Memory Allocation**: Pre-allocation and tensor reuse patterns
 5. **Lock Management**: Early release for better concurrency
+6. **Hot Model Swapping**: Zero-downtime atomic model switching
+7. **Health Check Automation**: Automatic model validation during swaps
+8. **Version Management**: Multi-model state management with rollback capability
