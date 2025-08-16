@@ -37,8 +37,12 @@
 pub mod llama;           // Core model inference engine
 pub mod version_manager; // Model lifecycle and health management  
 pub mod atomic_swap;     // Zero-downtime model switching
+pub mod failover_manager; // Automatic failover and high availability
+pub mod circuit_breaker; // Circuit breaker pattern for fault tolerance
 
 // Public API exports for clean module interface
 pub use llama::{ModelInfo, TinyLlamaModel};
-pub use version_manager::{ModelVersionManager, ModelVersion, HealthCheckResult};
+pub use version_manager::{ModelVersionManager, ModelVersion, HealthCheckResult, HealthStatus, PerformanceMetrics};
 pub use atomic_swap::{AtomicModelSwap, SwapResult, SwapSafetyReport};
+pub use failover_manager::{AutomaticFailoverManager, FailoverConfig, FailoverMetrics, FailureType, FailureRecord};
+pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState, CircuitBreakerMetrics, CallResult};

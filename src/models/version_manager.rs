@@ -640,47 +640,66 @@ pub async fn remove_model(&self, model_id: &str)-> Result<()>{
     Ok(())
 }
 
-fn calculate_config_hash(&self, name: &str, version: &str)-> String{
-     use std::collections::hash_map::DefaultHasher;
+    fn calculate_config_hash(&self, name: &str, version: &str)-> String{
+        use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    name.hash(&mut hasher);
-    version.hash(&mut hasher);
-    format!("{:x}",hasher.finish())
-}
-
-/// Get System status and statistics
-pub async fn get_system_status(&self)-> SystemStatus{
-    let models = self.models.read().await;
-    let versions = self.versions.read().await;
-    let active_id = self.active_model_id.read().await;
-
-    let total_models = models.len();
-    let loaded_models = models.len();
-
-    let mut status_counts = HashMap::new();
-
-    for version in versions.values(){
-        let status_key = match &version.status{
-            ModelStatus::Loading => "loading",
-            ModelStatus::HealthCheck => "health_check",
-            ModelStatus::Ready => "ready",
-            ModelStatus::Active => "active",
-            ModelStatus::Deprecated => "deprecated",
-            ModelStatus::Failed(_) => "failed",
-        };
-        *status_counts.entry(status_key.to_string()).or_insert(0)+=1;
+        let mut hasher = DefaultHasher::new();
+        name.hash(&mut hasher);
+        version.hash(&mut hasher);
+        format!("{:x}",hasher.finish())
     }
 
-    SystemStatus{
-        total_models,
-        loaded_models,
-        active_model_id: active_id.clone(),
-        status_counts,
-        max_models: self.config.max_models
+    /// Get System status and statistics
+    pub async fn get_system_status(&self)-> SystemStatus{
+        let models = self.models.read().await;
+        let versions = self.versions.read().await;
+        let active_id = self.active_model_id.read().await;
+
+        let total_models = models.len();
+        let loaded_models = models.len();
+
+        let mut status_counts = HashMap::new();
+
+        for version in versions.values(){
+            let status_key = match &version.status{
+                ModelStatus::Loading => "loading",
+                ModelStatus::HealthCheck => "health_check",
+                ModelStatus::Ready => "ready",
+                ModelStatus::Active => "active",
+                ModelStatus::Deprecated => "deprecated",
+                ModelStatus::Failed(_) => "failed",
+            };
+            *status_counts.entry(status_key.to_string()).or_insert(0)+=1;
+        }
+
+        SystemStatus{
+            total_models,
+            loaded_models,
+            active_model_id: active_id.clone(),
+            status_counts,
+            max_models: self.config.max_models
+        }
     }
 
-}
+    // FAILOVER INTEGRATION: Get health score for a specific model
+    pub async fn get_model_health_score(&self, model_id: &str) -> Result<f32> {
+        let versions = self.versions.read().await;
+        if let Some(version) = versions.get(model_id) {
+            Ok(version.health_score)
+        } else {
+            Err(anyhow::anyhow!("Model {} not found", model_id))
+        }
+    }
+
+    // FAILOVER INTEGRATION: Alias for health_check_model for consistency
+    pub async fn check_model_health(&self, model_id: &str) -> Result<HealthCheckResult> {
+        self.health_check_model(model_id).await
+    }
+
+    // FAILOVER INTEGRATION: Swap active model (wrapper around switch_to_model)
+    pub async fn swap_active_model(&self, model_id: &str) -> Result<()> {
+        self.switch_to_model(model_id).await
+    }
 }
 
 pub struct SystemStatus{
@@ -690,5 +709,3 @@ pub struct SystemStatus{
     pub status_counts: HashMap<String, usize>,
     pub max_models: usize
 }
-
-
