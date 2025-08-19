@@ -7,12 +7,12 @@
 //
 // ================================================================================================
 
-use crate::vector::{VectorPoint, VectorBackend, VectorResult};
+use crate::vector::{VectorPoint, VectorBackend};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
-    routing::{get, post, delete},
+    routing::{get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -181,8 +181,6 @@ pub fn create_vector_router() -> Router<VectorApiState> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::StatusCode;
-    use std::collections::HashMap;
 
     use crate::vector::VectorStorageFactory;
     
