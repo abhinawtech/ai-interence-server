@@ -7,12 +7,9 @@ use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::gemma::{Config, Model as Gemma};
 use hf_hub::{Repo, RepoType, api::tokio::{Api, ApiBuilder}};
-use std::fs;
 use tokenizers::Tokenizer;
-use crate::models::traits::{ModelTrait, ModelInfo, BoxedModel, ModelHealthCheck};
+use crate::models::traits::{ModelTrait, ModelInfo, BoxedModel};
 use async_trait::async_trait;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 /// Gemma Model Implementation - Direct PoC Integration with Fresh Instance Strategy  
 #[derive(Debug)]
@@ -67,7 +64,7 @@ impl GemmaModel {
         })
     }
 
-    async fn load_model_components(device: &Device) -> Result<(Tokenizer, Config, Vec<std::path::PathBuf>)> {
+    async fn load_model_components(_device: &Device) -> Result<(Tokenizer, Config, Vec<std::path::PathBuf>)> {
         // EXACT COPY of your working PoC loading logic
         let api = if let Ok(token) = std::env::var("HF_TOKEN") {
             tracing::info!("🔑 Using HuggingFace token for authentication");

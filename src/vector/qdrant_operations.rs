@@ -19,8 +19,8 @@ use crate::vector::{
 use anyhow::Result;
 use qdrant_client::qdrant::{
     PointStruct, SearchPoints, UpsertPoints,
-    DeletePoints, GetPoints, PointsIdsList,
-    Value, VectorsOutput, Vector,
+    DeletePoints, GetPoints,
+    Value, Vector,
     point_id::PointIdOptions, PointId,
     value::Kind,
 };
@@ -507,7 +507,6 @@ impl QdrantVectorStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vector::QdrantConfig;
 
     #[test]
     fn test_qdrant_storage_stats_default() {

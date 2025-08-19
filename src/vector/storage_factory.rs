@@ -12,13 +12,12 @@
 // ================================================================================================
 
 use crate::vector::{
-    VectorStorage, QdrantVectorStorage, QdrantClient, QdrantConfig, QdrantClientBuilder,
+    VectorStorage, QdrantVectorStorage, QdrantConfig, QdrantClientBuilder,
     VectorError, VectorResult, VectorPoint, StorageStats,
 };
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::{info, warn, error, debug};
+use tracing::{info, warn, debug};
 use uuid::Uuid;
 
 /// Unified vector storage backend that can use either Qdrant or in-memory storage
@@ -187,7 +186,7 @@ impl VectorBackend {
     pub async fn batch_insert(&self, points: Vec<VectorPoint>) -> VectorResult<Vec<Uuid>> {
         match self {
             VectorBackend::Qdrant(storage) => storage.batch_insert(points).await,
-            VectorBackend::InMemory(storage) => {
+            VectorBackend::InMemory(_storage) => {
                 // For in-memory, fall back to individual inserts
                 let mut ids = Vec::new();
                 for point in points {

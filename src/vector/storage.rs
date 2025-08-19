@@ -6,7 +6,7 @@
 //
 // ================================================================================================
 
-use super::{VectorPoint, VectorError, VectorResult};
+use super::{VectorPoint, VectorResult};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -100,7 +100,6 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
     fn test_basic_storage_operations() {

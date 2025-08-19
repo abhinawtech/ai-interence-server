@@ -426,7 +426,7 @@ impl RateLimiter {
     // Start cleanup background task
     async fn start_cleanup_task(&self) {
         let client_buckets = self.client_buckets.clone();
-        let endpoint_buckets = self.endpoint_buckets.clone();
+        let _endpoint_buckets = self.endpoint_buckets.clone();
         let metrics = self.metrics.clone();
         let cleanup_interval = Duration::from_secs(self.config.cleanup_interval_seconds);
         let client_expiry = Duration::from_secs(self.config.client_expiry_seconds);

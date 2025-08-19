@@ -25,7 +25,7 @@ use ai_interence_server::api::health::health_check;
 use ai_interence_server::api::models::*;
 use ai_interence_server::api::vectors::create_vector_router;
 use ai_interence_server::batching::{BatchConfig, BatchProcessor};
-use ai_interence_server::vector::{VectorStorageFactory, VectorBackend};
+use ai_interence_server::vector::{VectorStorageFactory};
 use ai_interence_server::models::{ModelVersionManager, AtomicModelSwap, version_manager::ModelStatus, initialize_models};
 use axum::{
     Router,

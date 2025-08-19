@@ -24,7 +24,6 @@ pub use traits::{ModelTrait, ModelInfo, BoxedModel, ModelHealthCheck};
 pub use registry::{ModelRegistry, global_registry, initialize_registry};
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 
 // New trait-based ModelInstance using dynamic dispatch
 pub struct ModelInstance {

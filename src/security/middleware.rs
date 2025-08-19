@@ -32,7 +32,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn, error, debug};
+use tracing::{ warn, error, debug};
 
 use super::{
     auth::{AuthService, Permission, AuthResult, AuthDenialReason},

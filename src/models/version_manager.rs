@@ -38,9 +38,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 use anyhow::Result;
-use chrono::{DateTime, Utc}; // Add this import
 
-use crate::models::{ModelInstance, ModelInfo}; // Add ModelInfo import
+use crate::models::{ModelInstance}; // Add ModelInfo import
 
 // DATA STRUCTURE: ModelVersion - Complete Model Metadata Registry
 // Comprehensive model tracking structure for operational management:
@@ -249,7 +248,7 @@ pub async fn load_model_version(
     let load_model_id = model_id.clone();
     
     // Clone self for the spawned task
-    let version_manager_clone = Arc::new(ModelVersionManager {
+    let _version_manager_clone = Arc::new(ModelVersionManager {
         models: self.models.clone(),
         versions: self.versions.clone(),
         active_model_id: self.active_model_id.clone(),

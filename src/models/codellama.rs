@@ -23,7 +23,7 @@ use serde_json::Value;
 use std::fs;
 use tokenizers::Tokenizer;
 use std::sync::Arc;
-use crate::models::traits::{ModelTrait, ModelInfo, BoxedModel, ModelHealthCheck};
+use crate::models::traits::{ModelTrait, ModelInfo, BoxedModel};
 use async_trait::async_trait;
 
 /// CodeLlama-7B Model - Specialized Code Generation Engine

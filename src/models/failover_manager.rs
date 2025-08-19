@@ -28,12 +28,12 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use serde::{Deserialize, Serialize};
+use serde::{ Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn, error};
 
 use crate::models::ModelVersionManager;
-use crate::models::version_manager::{ModelVersion, HealthCheckResult, HealthStatus, ModelStatus};
+use crate::models::version_manager::{ ModelStatus};
 use anyhow::Result;
 
 // CONFIGURATION: FailoverConfig - Production Failover Parameters
@@ -331,7 +331,7 @@ impl AutomaticFailoverManager {
         let backup_model_id = self.select_best_backup_model().await?;
         
         // Execute atomic model swap
-        let swap_result = self.model_manager
+        let _swap_result = self.model_manager
             .swap_active_model(&backup_model_id)
             .await
             .map_err(|e| anyhow::anyhow!("Failover swap failed: {}", e))?;

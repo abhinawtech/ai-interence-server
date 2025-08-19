@@ -30,7 +30,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
-use tracing::{info, warn, error, debug};
+use tracing::{info, warn, debug};
 use uuid::Uuid;
 
 // CONFIGURATION: AuthConfig - Authentication System Parameters

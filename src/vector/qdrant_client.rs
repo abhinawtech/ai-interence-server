@@ -198,7 +198,7 @@ impl QdrantClient {
     }
 
     /// Execute operation with retry logic
-    async fn execute_with_retry<F, T>(&self, operation: F) -> Result<T>
+    async fn _execute_with_retry<F, T>(&self, operation: F) -> Result<T>
     where
         F: Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send>> + Send + Sync,
         T: Send,

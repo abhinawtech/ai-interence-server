@@ -14,8 +14,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use tokio::sync::Mutex;
-use crate::models::traits::{BoxedModel, ModelTrait, ModelInfo};
+use crate::models::traits::{BoxedModel};
 
 /// Factory function for creating model instances
 type ModelFactory = Box<dyn Fn() -> Box<dyn std::future::Future<Output = Result<BoxedModel>> + Send + Unpin> + Send + Sync>;
@@ -165,7 +164,7 @@ pub fn global_registry() -> &'static ModelRegistry {
 
 /// Initialize the global registry with default models
 pub fn initialize_registry() {
-    let registry = global_registry();
+    let _registry = global_registry();
     tracing::info!("🏭 Initializing global model registry...");
     
     // Models will register themselves in their respective modules
