@@ -1,48 +1,131 @@
-// ARCHITECTURE: Model Management Module - Enterprise-Grade AI Model Lifecycle System
-//
-// DESIGN OVERVIEW:
-// This module implements a comprehensive model management system for production AI inference:
-// 
-// 1. MODEL ABSTRACTION (llama.rs):
-//    - TinyLlamaModel: Core inference engine with Metal GPU acceleration
-//    - ModelInfo: Metadata and performance characteristics
-//    - Memory-efficient loading with SafeTensors and F16 precision
-//    - Optimized tokenization and generation loops
-//
-// 2. VERSION MANAGEMENT (version_manager.rs):
-//    - Multi-version model storage with configurable limits (max 3 models)
-//    - Comprehensive health checking with 4-dimensional validation
-//    - Background model loading with automatic health assessment
-//    - Model status lifecycle: Loading → HealthCheck → Ready → Active → Deprecated
-//
-// 3. ATOMIC SWAPPING (atomic_swap.rs):
-//    - Zero-downtime model switching with 5-point safety validation
-//    - Health check retry logic with configurable timeout and attempts
-//    - Request queueing during swaps to ensure service continuity
-//    - Comprehensive swap safety reporting and error handling
-//
-// PERFORMANCE CHARACTERISTICS:
-// - 10-14 tokens/second inference on Apple Silicon M1/M2/M3
-// - <3 second model swapping with automatic validation
-// - <100ms health check completion times
-// - Memory-efficient concurrent model storage
-//
-// PRODUCTION READINESS:
-// ✅ Thread-safe operations with Arc<Mutex<T>> patterns
-// ✅ Comprehensive error handling and logging
-// ✅ Configurable timeouts and retry logic  
-// ⚠️  Resource cleanup needs enhancement for long-running deployments
-// ⚠️  Monitoring and alerting integration required
+pub mod llama;
+pub mod llama_generic;
+pub mod codellama;
+pub mod deepseek_coder;
+pub mod version_manager;
+pub mod failover_manager;
+pub mod phi3;
+pub mod gemma;
+pub mod gemma_poc;
+pub mod atomic_swap;
+pub mod traits;
+pub mod registry;
 
-pub mod llama;           // Core model inference engine
-pub mod version_manager; // Model lifecycle and health management  
-pub mod atomic_swap;     // Zero-downtime model switching
-pub mod failover_manager; // Automatic failover and high availability
-pub mod circuit_breaker; // Circuit breaker pattern for fault tolerance
-
-// Public API exports for clean module interface
-pub use llama::{ModelInfo, TinyLlamaModel};
-pub use version_manager::{ModelVersionManager, ModelVersion, HealthCheckResult, HealthStatus, PerformanceMetrics};
+pub use llama::{TinyLlamaModel};
+pub use llama_generic::GenericLlamaModel;
+pub use codellama::CodeLlamaModel;
+pub use deepseek_coder::DeepSeekCoderModel;
+pub use phi3::Phi3Model;
+pub use gemma_poc::GemmaModel;
+pub use version_manager::{ModelVersionManager, ModelVersion, HealthCheckResult};
+pub use failover_manager::AutomaticFailoverManager;
 pub use atomic_swap::{AtomicModelSwap, SwapResult, SwapSafetyReport};
-pub use failover_manager::{AutomaticFailoverManager, FailoverConfig, FailoverMetrics, FailureType, FailureRecord};
-pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState, CircuitBreakerMetrics, CallResult};
+pub use traits::{ModelTrait, ModelInfo, BoxedModel, ModelHealthCheck};
+pub use registry::{ModelRegistry, global_registry, initialize_registry};
+
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+
+// New trait-based ModelInstance using dynamic dispatch
+pub struct ModelInstance {
+    inner: BoxedModel,
+}
+
+impl std::fmt::Debug for ModelInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ModelInstance({})", self.inner.model_name())
+    }
+}
+
+impl ModelInstance {
+    /// Create a ModelInstance from a boxed model trait
+    pub fn new(model: BoxedModel) -> Self {
+        Self { inner: model }
+    }
+
+    /// Generate text using the underlying model
+    pub async fn generate(&mut self, prompt: &str, max_tokens: usize) -> Result<String> {
+        self.inner.generate(prompt, max_tokens).await
+    }
+
+    /// Get the compute device
+    pub fn device(&self) -> &candle_core::Device {
+        self.inner.device()
+    }
+
+    /// Load a model by name using the registry
+    pub async fn load_by_name(name: &str) -> Result<Self> {
+        let model = global_registry().load_model(name).await?;
+        Ok(Self::new(model))
+    }
+
+    /// Get model information
+    pub fn model_info(&self) -> ModelInfo {
+        self.inner.model_info()
+    }
+
+    /// Get model name
+    pub fn model_name(&self) -> &str {
+        self.inner.model_name()
+    }
+
+    /// Perform health check
+    pub async fn health_check(&mut self) -> Result<ModelHealthCheck> {
+        self.inner.health_check().await
+    }
+
+    /// Check if model supports a feature
+    pub fn supports_feature(&self, feature: &str) -> bool {
+        self.inner.supports_feature(feature)
+    }
+}
+
+/// Initialize all models in the registry
+/// This should be called at application startup
+pub fn initialize_models() -> Result<()> {
+    tracing::info!("🚀 Initializing model registry with available models...");
+    
+    // Initialize the registry
+    initialize_registry();
+    
+    // Register all available models
+    if let Err(e) = gemma_poc::register_gemma_model() {
+        tracing::warn!("Failed to register Gemma model: {}", e);
+    }
+    
+    // Enable TinyLlama for fast inference testing
+    if let Err(e) = llama::register_tinyllama_model() {
+        tracing::warn!("Failed to register TinyLlama model: {}", e);
+    }
+    
+    // Register CodeLlama for code generation tasks
+    if let Err(e) = codellama::register_codellama_model() {
+        tracing::warn!("Failed to register CodeLlama model: {}", e);
+    }
+    
+    // Register Generic Llama for flexible model loading
+    if let Err(e) = llama_generic::register_generic_llama_model() {
+        tracing::warn!("Failed to register Generic Llama model: {}", e);
+    }
+    
+    // Register DeepSeek Coder for specialized code generation
+    if let Err(e) = deepseek_coder::register_deepseek_coder_model() {
+        tracing::warn!("Failed to register DeepSeek Coder model: {}", e);
+    }
+    // if let Err(e) = phi3::register_phi3_model() {
+    //     tracing::warn!("Failed to register Phi3 model: {}", e);
+    // }
+    
+    let registry = global_registry();
+    let models = registry.list_models();
+    tracing::info!("✅ Registered {} models in registry:", models.len());
+    
+    for model in models {
+        tracing::info!("  📋 {} ({}): {} aliases", 
+                      model.name, 
+                      model.model_type,
+                      model.aliases.len());
+    }
+    
+    Ok(())
+}

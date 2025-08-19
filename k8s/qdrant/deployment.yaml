@@ -1,0 +1,500 @@
+# ================================================================================================
+# QDRANT PRODUCTION DEPLOYMENT
+# ================================================================================================
+#
+# PURPOSE:
+# Production-grade Qdrant deployment with high availability, performance optimization,
+# and comprehensive monitoring for AI workloads.
+#
+# FEATURES:
+# ✅ High availability with multiple replicas
+# ✅ Rolling updates with zero downtime
+# ✅ Resource limits optimized for vector operations
+# ✅ Health checks and readiness probes
+# ✅ Security contexts and Pod Security Standards
+# ✅ Affinity rules for optimal pod placement
+# ✅ Persistent storage integration
+# ✅ Monitoring and telemetry
+#
+# ================================================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qdrant
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: vector-database
+    app.kubernetes.io/version: "1.7.4"
+    app.kubernetes.io/part-of: ai-inference-system
+    app.kubernetes.io/managed-by: kubernetes
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    description: "Production Qdrant vector database deployment"
+spec:
+  # ==============================================================================================
+  # DEPLOYMENT STRATEGY
+  # ==============================================================================================
+  replicas: 3  # High availability setup
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1      # Ensure at least 2 replicas available during updates
+      maxSurge: 1           # Allow 1 extra pod during updates
+  
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+      app.kubernetes.io/component: vector-database
+  
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: qdrant
+        app.kubernetes.io/component: vector-database
+        app.kubernetes.io/version: "1.7.4"
+        app.kubernetes.io/part-of: ai-inference-system
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "6333"
+        prometheus.io/path: "/metrics"
+        kubectl.kubernetes.io/default-container: qdrant
+    spec:
+      # ============================================================================================
+      # SECURITY CONTEXT
+      # ============================================================================================
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      
+      # ============================================================================================
+      # SERVICE ACCOUNT
+      # ============================================================================================
+      serviceAccountName: qdrant-service-account
+      automountServiceAccountToken: false
+      
+      # ============================================================================================
+      # POD PLACEMENT AND AFFINITY
+      # ============================================================================================
+      affinity:
+        # Prefer to spread pods across different nodes
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values: ["qdrant"]
+              topologyKey: kubernetes.io/hostname
+        
+        # Prefer nodes with SSD storage
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 50
+            preference:
+              matchExpressions:
+              - key: storage-type
+                operator: In
+                values: ["ssd", "nvme"]
+      
+      # ============================================================================================
+      # TOLERATIONS FOR DEDICATED NODES
+      # ============================================================================================
+      tolerations:
+      - key: "vector-database"
+        operator: "Equal"
+        value: "qdrant"
+        effect: "NoSchedule"
+      
+      # ============================================================================================
+      # INITIALIZATION CONTAINERS
+      # ============================================================================================
+      initContainers:
+      - name: storage-permission-fix
+        image: busybox:1.35
+        command: ['sh', '-c']
+        args:
+        - |
+          chown -R 1000:1000 /qdrant/storage /qdrant/snapshots
+          chmod -R 755 /qdrant/storage /qdrant/snapshots
+        securityContext:
+          runAsUser: 0  # Need root to change ownership
+        volumeMounts:
+        - name: qdrant-data
+          mountPath: /qdrant/storage
+        - name: qdrant-snapshots
+          mountPath: /qdrant/snapshots
+      
+      # Wait for storage to be ready
+      - name: storage-readiness-check
+        image: busybox:1.35
+        command: ['sh', '-c']
+        args:
+        - |
+          echo "Checking storage readiness..."
+          while [ ! -d /qdrant/storage ]; do
+            echo "Waiting for storage to be mounted..."
+            sleep 2
+          done
+          echo "Storage is ready"
+        volumeMounts:
+        - name: qdrant-data
+          mountPath: /qdrant/storage
+      
+      # ============================================================================================
+      # MAIN CONTAINER
+      # ============================================================================================
+      containers:
+      - name: qdrant
+        image: qdrant/qdrant:v1.7.4
+        imagePullPolicy: IfNotPresent
+        
+        # ==========================================================================================
+        # SECURITY CONTEXT
+        # ==========================================================================================
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        
+        # ==========================================================================================
+        # RESOURCE ALLOCATION
+        # ==========================================================================================
+        resources:
+          requests:
+            cpu: "1"        # 1 CPU core minimum
+            memory: "4Gi"   # 4GB memory minimum
+            ephemeral-storage: "10Gi"
+          limits:
+            cpu: "4"        # 4 CPU cores maximum
+            memory: "16Gi"  # 16GB memory maximum
+            ephemeral-storage: "20Gi"
+        
+        # ==========================================================================================
+        # ENVIRONMENT VARIABLES
+        # ==========================================================================================
+        env:
+        - name: QDRANT__LOG_LEVEL
+          value: "INFO"
+        - name: QDRANT__HTTP_PORT
+          value: "6333"
+        - name: QDRANT__GRPC_PORT
+          value: "6334"
+        - name: QDRANT__STORAGE__STORAGE_PATH
+          value: "/qdrant/storage"
+        - name: QDRANT__STORAGE__SNAPSHOTS_PATH
+          value: "/qdrant/snapshots"
+        - name: QDRANT__STORAGE__TEMP_PATH
+          value: "/tmp/qdrant"
+        
+        # Performance optimization
+        - name: QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS
+          value: "8"
+        - name: QDRANT__STORAGE__PERFORMANCE__MAX_OPTIMIZATION_THREADS
+          value: "4"
+        - name: QDRANT__STORAGE__PERFORMANCE__INDEXING_THRESHOLD
+          value: "50000"
+        
+        # HNSW Configuration
+        - name: QDRANT__STORAGE__HNSW__M
+          value: "64"
+        - name: QDRANT__STORAGE__HNSW__EF_CONSTRUCT
+          value: "1024"
+        - name: QDRANT__STORAGE__HNSW__FULL_SCAN_THRESHOLD
+          value: "20000"
+        
+        # Cluster configuration
+        - name: QDRANT__CLUSTER__ENABLED
+          value: "true"
+        - name: QDRANT__CLUSTER__NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        
+        # API Configuration
+        - name: QDRANT__SERVICE__MAX_REQUEST_SIZE_MB
+          value: "128"
+        - name: QDRANT__SERVICE__MAX_WORKERS
+          value: "8"
+        - name: QDRANT__SERVICE__ENABLE_CORS
+          value: "true"
+        
+        # Security
+        - name: QDRANT__SERVICE__API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: qdrant-secrets
+              key: api-key
+              optional: true
+        
+        # ==========================================================================================
+        # PORT CONFIGURATION
+        # ==========================================================================================
+        ports:
+        - name: http
+          containerPort: 6333
+          protocol: TCP
+        - name: grpc
+          containerPort: 6334
+          protocol: TCP
+        
+        # ==========================================================================================
+        # HEALTH CHECKS
+        # ==========================================================================================
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+          successThreshold: 1
+        
+        readinessProbe:
+          httpGet:
+            path: /readiness
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30  # Allow 5 minutes for startup
+          successThreshold: 1
+        
+        # ==========================================================================================
+        # VOLUME MOUNTS
+        # ==========================================================================================
+        volumeMounts:
+        # Main data storage
+        - name: qdrant-data
+          mountPath: /qdrant/storage
+        
+        # Snapshots and backups
+        - name: qdrant-snapshots
+          mountPath: /qdrant/snapshots
+        
+        # Configuration
+        - name: qdrant-config
+          mountPath: /qdrant/config
+          readOnly: true
+        
+        # Temporary directory (writable)
+        - name: tmp-dir
+          mountPath: /tmp
+        
+        # WAL directory (high-performance)
+        - name: qdrant-wal
+          mountPath: /qdrant/wal
+        
+        # Initialization scripts
+        - name: init-scripts
+          mountPath: /scripts
+          readOnly: true
+        
+        # ==========================================================================================
+        # LIFECYCLE HOOKS
+        # ==========================================================================================
+        lifecycle:
+          postStart:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - |
+                echo "Qdrant container started"
+                # Wait for service to be ready before running init scripts
+                sleep 30
+                /scripts/init-collections.sh || true
+          
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - |
+                echo "Graceful shutdown initiated"
+                # Create final snapshot before shutdown
+                curl -X POST http://localhost:6333/snapshots || true
+                sleep 10
+      
+      # ============================================================================================
+      # SIDECAR CONTAINERS
+      # ============================================================================================
+      
+      # Metrics exporter sidecar
+      - name: metrics-exporter
+        image: prom/node-exporter:v1.6.1
+        args:
+        - --path.procfs=/host/proc
+        - --path.sysfs=/host/sys
+        - --collector.filesystem.mount-points-exclude
+        - ^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)
+        ports:
+        - name: metrics
+          containerPort: 9100
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+        volumeMounts:
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+      
+      # ============================================================================================
+      # VOLUME DEFINITIONS
+      # ============================================================================================
+      volumes:
+      # Persistent storage
+      - name: qdrant-data
+        persistentVolumeClaim:
+          claimName: qdrant-data-pvc
+      
+      - name: qdrant-snapshots
+        persistentVolumeClaim:
+          claimName: qdrant-snapshots-pvc
+      
+      - name: qdrant-wal
+        persistentVolumeClaim:
+          claimName: qdrant-wal-pvc
+      
+      # Configuration
+      - name: qdrant-config
+        configMap:
+          name: qdrant-config
+          defaultMode: 0644
+      
+      - name: init-scripts
+        configMap:
+          name: qdrant-init-scripts
+          defaultMode: 0755
+      
+      # Temporary directories
+      - name: tmp-dir
+        emptyDir:
+          sizeLimit: 1Gi
+      
+      # Host volumes for metrics
+      - name: proc
+        hostPath:
+          path: /proc
+      - name: sys
+        hostPath:
+          path: /sys
+      
+      # ============================================================================================
+      # DNS AND NETWORKING
+      # ============================================================================================
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 120
+      
+      # ============================================================================================
+      # SCHEDULING PREFERENCES
+      # ============================================================================================
+      priorityClassName: high-priority  # Requires PriorityClass to be created
+      schedulerName: default-scheduler
+
+---
+# ================================================================================================
+# HORIZONTAL POD AUTOSCALER
+# ================================================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: qdrant-hpa
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: autoscaling
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: qdrant
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # 5 minutes
+      policies:
+      - type: Percent
+        value: 10    # Scale down by at most 10% of current replicas
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60   # 1 minute
+      policies:
+      - type: Percent
+        value: 50    # Scale up by at most 50% of current replicas
+        periodSeconds: 60
+      - type: Pods
+        value: 2     # Scale up by at most 2 pods
+        periodSeconds: 60
+
+---
+# ================================================================================================
+# POD DISRUPTION BUDGET
+# ================================================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: qdrant-pdb
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: availability
+spec:
+  minAvailable: 2  # Always keep at least 2 pods available
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+      app.kubernetes.io/component: vector-database

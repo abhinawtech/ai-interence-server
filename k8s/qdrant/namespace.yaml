@@ -1,0 +1,80 @@
+# ================================================================================================
+# QDRANT NAMESPACE CONFIGURATION
+# ================================================================================================
+#
+# PURPOSE: 
+# Creates dedicated namespace for Qdrant vector database deployment with resource quotas
+# and network policies for security isolation.
+#
+# ================================================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: qdrant-system
+  labels:
+    name: qdrant-system
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: vector-database
+    app.kubernetes.io/part-of: ai-inference-system
+    app.kubernetes.io/managed-by: kubernetes
+    environment: production
+
+---
+# ================================================================================================
+# RESOURCE QUOTA FOR QDRANT NAMESPACE
+# ================================================================================================
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: qdrant-resource-quota
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: resource-management
+spec:
+  hard:
+    # Compute Resources
+    requests.cpu: "2"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 32Gi
+    
+    # Storage Resources
+    requests.storage: 500Gi
+    persistentvolumeclaims: "3"
+    
+    # API Objects
+    pods: "10"
+    services: "3"
+    secrets: "5"
+    configmaps: "5"
+    
+    # Network Resources
+    services.nodeports: "0"
+    services.loadbalancers: "1"
+
+---
+# ================================================================================================
+# LIMIT RANGE FOR RESOURCE DEFAULTS
+# ================================================================================================
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: qdrant-limit-range
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: resource-management
+spec:
+  limits:
+  - default:
+      cpu: "1"
+      memory: 2Gi
+    defaultRequest:
+      cpu: "500m"
+      memory: 1Gi
+    type: Container
+  - default:
+      storage: 100Gi
+    type: PersistentVolumeClaim

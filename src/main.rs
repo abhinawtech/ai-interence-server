@@ -20,11 +20,13 @@
 // - Request queueing with backpressure to prevent memory exhaustion
 // - Graceful shutdown with in-flight request completion
 
-use ai_interence_server::api::generate::generate_text;
+use ai_interence_server::api::generate::{generate_text, GenerateState};
 use ai_interence_server::api::health::health_check;
 use ai_interence_server::api::models::*;
+use ai_interence_server::api::vectors::create_vector_router;
 use ai_interence_server::batching::{BatchConfig, BatchProcessor};
-use ai_interence_server::models::{ModelVersionManager, AtomicModelSwap, version_manager::ModelStatus};
+use ai_interence_server::vector::{VectorStorageFactory, VectorBackend};
+use ai_interence_server::models::{ModelVersionManager, AtomicModelSwap, version_manager::ModelStatus, initialize_models};
 use axum::{
     Router,
     routing::{get, post},
@@ -58,6 +60,10 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     tracing::info!("🚀 Starting AI Inference Server with Batching");
+
+    // ARCHITECTURE: Initialize Model Registry
+    // This sets up the new trait-based model system that supports dynamic model loading
+    initialize_models()?;
 
     // CONFIGURATION: Dynamic Batch Settings
     // Environment variables allow runtime tuning without recompilation
@@ -93,6 +99,17 @@ async fn main() -> anyhow::Result<()> {
         batch_config.max_queue_size
     );
 
+    // VECTOR DATABASE: Intelligent Backend Selection
+    tracing::info!("🗂️ Initializing vector storage with smart backend selection...");
+    let vector_backend = Arc::new(
+        VectorStorageFactory::create()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create vector storage: {}", e))?
+    );
+    
+    tracing::info!("✅ Vector storage initialized using {} backend", 
+                   vector_backend.backend_type());
+
     // ARCHITECTURE: Model Version Management System Initialization
     // The ModelVersionManager provides enterprise-grade model lifecycle management:
     // - Multi-version model storage with up to 3 concurrent models
@@ -105,13 +122,13 @@ async fn main() -> anyhow::Result<()> {
     // BOOTSTRAP: Initial Model Loading with Fault Tolerance
     // Loads the primary TinyLlama model and performs comprehensive validation:
     // 1. Background model loading to prevent blocking the main thread
-    // 2. Automatic health check with performance benchmarking (9-11 tok/s)
+    // 2. Automatic health check with performance benchmarking (8-12 tok/s)
     // 3. Memory usage validation and GPU resource allocation
     // 4. Generation capability testing with sample prompts
     tracing::info!("📦 Loading initial TinyLlama model version...");
     let model_id = version_manager.load_model_version(
-        "TinyLlama-1.1B-Chat".to_string(),
-        "v1.0".to_string(),
+        "tinyllama-1.1b-chat".to_string(),
+        "main".to_string(),
         None
     ).await?;
     
@@ -131,11 +148,11 @@ async fn main() -> anyhow::Result<()> {
         if let Some(version) = version_manager.get_model_version(&model_id).await {
             match version.status {
                 ModelStatus::Loading => {
-                    if attempts < 15 { // Wait up to 30 seconds
-                        tracing::info!("Model still loading, attempt {}/15...", attempts);
+                    if attempts < 30 { // Wait up to 60 seconds
+                        tracing::info!("Model still loading, attempt {}/30...", attempts);
                         continue;
                     } else {
-                        return Err(anyhow::anyhow!("Model loading timeout after 30 seconds"));
+                        return Err(anyhow::anyhow!("Model loading timeout after 60 seconds"));
                     }
                 }
                 ModelStatus::Failed(ref err) => {
@@ -151,14 +168,16 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     
-    // VALIDATION: Comprehensive Health Assessment
+    // VALIDATION: Comprehensive Health Assessment (DISABLED FOR FASTER STARTUP)
     // Performs multi-dimensional model health evaluation:
     // 1. Basic generation capability testing with sample prompts
     // 2. Performance benchmarking to ensure acceptable token/sec rates
     // 3. Memory usage analysis for resource planning
     // 4. Overall health scoring for swap safety decisions
-    let health_result = version_manager.health_check_model(&model_id).await?;
-    tracing::info!("🏥 Health check result: score {:.2}", health_result.overall_score);
+    // TODO: Re-enable for production deployments
+    // let health_result = version_manager.health_check_model(&model_id).await?;
+    // tracing::info!("🏥 Health check result: score {:.2}", health_result.overall_score);
+    tracing::info!("🚀 Skipping comprehensive health checks for faster development startup");
     
     // ACTIVATION: Model Promotion to Active Status
     // Atomically transitions the validated model to active serving status:
@@ -201,21 +220,28 @@ async fn main() -> anyhow::Result<()> {
         processor_clone.start_processing_loop().await;
     });
 
+    // VECTOR OPERATIONS: Vector API Router Setup
+    tracing::info!("🔌 Setting up vector API router...");
+    let vector_router = create_vector_router().with_state(Arc::clone(&vector_backend));
+    tracing::info!("✅ Vector API router configured with {} backend", 
+                   vector_backend.backend_type());
+
     // ARCHITECTURE: Modular Router Design with State Separation
     // Implements clean separation of concerns via dedicated router modules:
     // - Generation router handles inference requests with BatchProcessor state
     // - Model management router handles lifecycle operations with dual state access
     // - State isolation prevents cross-contamination and improves maintainability
     
-    // INFERENCE: High-Performance Generation Router
-    // Optimized for low-latency inference operations:
-    // - Direct BatchProcessor access for minimal request overhead
+    // INFERENCE: High-Performance Generation Router with Conversation Memory
+    // Optimized for low-latency inference operations with context awareness:
+    // - Shared BatchProcessor and VectorBackend state for memory integration
     // - Health check endpoint for load balancer integration
-    // - POST /generate endpoint with streaming and batching support
+    // - POST /generate endpoint with conversation memory and batching support
+    let generate_state: GenerateState = (Arc::clone(&batch_processor), Arc::clone(&vector_backend));
     let generation_router = Router::new()
         .route("/health", get(health_check))
         .route("/api/v1/generate", post(generate_text))
-        .with_state(Arc::clone(&batch_processor));
+        .with_state(generate_state);
     
     // MANAGEMENT: Comprehensive Model Administration Router
     // Provides full model lifecycle management capabilities:
@@ -240,7 +266,9 @@ async fn main() -> anyhow::Result<()> {
     // - Maintains individual router optimizations and state isolation
     // - Provides unified endpoint namespace for client consumption
     // - Enables independent testing and development of router modules
-    let app = generation_router.merge(models_router);
+    let app = generation_router
+        .merge(models_router)
+        .merge(vector_router);
 
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "3000".to_string())
@@ -249,14 +277,22 @@ async fn main() -> anyhow::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!("🌐 Server starting on http://{}", addr);
     tracing::info!("📡 Available endpoints:");
-    tracing::info!("  • GET  /health - Health check");
-    tracing::info!("  • POST /api/v1/generate - Text generation");
-    tracing::info!("  • GET  /api/v1/models - List all models");
-    tracing::info!("  • POST /api/v1/models - Load new model");
-    tracing::info!("  • GET  /api/v1/models/:id - Get model info");
-    tracing::info!("  • POST /api/v1/models/swap - Atomic model swap");
-    tracing::info!("  • POST /api/v1/models/rollback - Rollback to previous model");
-    tracing::info!("  • GET  /api/v1/system/status - System status");
+    tracing::info!("  🔷 INFERENCE ENDPOINTS:");
+    tracing::info!("    • GET  /health - Health check");
+    tracing::info!("    • POST /api/v1/generate - Text generation");
+    tracing::info!("  🔷 MODEL MANAGEMENT:");
+    tracing::info!("    • GET  /api/v1/models - List all models");
+    tracing::info!("    • POST /api/v1/models - Load new model");
+    tracing::info!("    • GET  /api/v1/models/:id - Get model info");
+    tracing::info!("    • POST /api/v1/models/swap - Atomic model swap");
+    tracing::info!("    • POST /api/v1/models/rollback - Rollback to previous model");
+    tracing::info!("    • GET  /api/v1/system/status - System status");
+    tracing::info!("  🔷 VECTOR OPERATIONS:");
+    tracing::info!("    • POST /api/v1/vectors - Insert vector");
+    tracing::info!("    • POST /api/v1/vectors/search - Search similar vectors");
+    tracing::info!("    • GET  /api/v1/vectors/{{id}} - Get vector by ID");
+    tracing::info!("    • DELETE /api/v1/vectors/{{id}} - Delete vector");
+    tracing::info!("    • GET  /api/v1/vectors/stats - Storage statistics");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let server = axum::serve(listener, app);

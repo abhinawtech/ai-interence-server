@@ -1,0 +1,387 @@
+# ================================================================================================
+# QDRANT SERVICE CONFIGURATION
+# ================================================================================================
+#
+# PURPOSE:
+# Service definitions for Qdrant vector database with load balancing, service discovery,
+# and external access configuration for production deployment.
+#
+# FEATURES:
+# ✅ ClusterIP service for internal communication
+# ✅ LoadBalancer service for external access
+# ✅ Headless service for direct pod access
+# ✅ Service monitoring with Prometheus annotations
+# ✅ Session affinity for stateful operations
+#
+# ================================================================================================
+
+# ================================================================================================
+# INTERNAL CLUSTER SERVICE
+# ================================================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant-service
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: service
+    app.kubernetes.io/version: "1.7.4"
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "6333"
+    prometheus.io/path: "/metrics"
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"  # For AWS
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 6333
+    targetPort: http
+    protocol: TCP
+  - name: grpc
+    port: 6334
+    targetPort: grpc
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: vector-database
+  # Session affinity for consistent routing (important for vector operations)
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600  # 1 hour session timeout
+
+---
+# ================================================================================================
+# EXTERNAL LOAD BALANCER SERVICE
+# ================================================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant-external
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: external-service
+    app.kubernetes.io/version: "1.7.4"
+  annotations:
+    # AWS Load Balancer annotations
+    service.beta.kubernetes.io/aws-load-balancer-type: "external"
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-interval: "30"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-timeout: "10"
+    service.beta.kubernetes.io/aws-load-balancer-healthy-threshold: "2"
+    service.beta.kubernetes.io/aws-load-balancer-unhealthy-threshold: "3"
+    
+    # Google Cloud Load Balancer annotations (alternative)
+    # cloud.google.com/load-balancer-type: "External"
+    # cloud.google.com/backend-config: '{"default": "qdrant-backend-config"}'
+    
+    # Azure Load Balancer annotations (alternative)
+    # service.beta.kubernetes.io/azure-load-balancer-internal: "false"
+    
+    # Monitoring
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "6333"
+    prometheus.io/path: "/metrics"
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: http
+    protocol: TCP
+  - name: grpc
+    port: 6334
+    targetPort: grpc
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: vector-database
+  # External traffic policy for performance
+  externalTrafficPolicy: Local
+  # Session affinity for external clients
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
+
+---
+# ================================================================================================
+# HEADLESS SERVICE FOR STATEFULSET-STYLE ACCESS
+# ================================================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant-headless
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: headless-service
+    app.kubernetes.io/version: "1.7.4"
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "6333"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service
+  ports:
+  - name: http
+    port: 6333
+    targetPort: http
+    protocol: TCP
+  - name: grpc
+    port: 6334
+    targetPort: grpc
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: vector-database
+  # No session affinity for headless service
+  sessionAffinity: None
+
+---
+# ================================================================================================
+# SERVICE MONITOR FOR PROMETHEUS
+# ================================================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: qdrant-service-monitor
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: monitoring
+    monitoring: enabled
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+      app.kubernetes.io/component: service
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+    scheme: http
+    honorLabels: true
+    metricRelabelings:
+    - sourceLabels: [__name__]
+      regex: qdrant_(.+)
+      targetLabel: __name__
+      replacement: qdrant_${1}
+  - port: http
+    path: /telemetry
+    interval: 60s
+    scrapeTimeout: 15s
+    scheme: http
+    metricRelabelings:
+    - sourceLabels: [__name__]
+      regex: qdrant_telemetry_(.+)
+      targetLabel: __name__
+      replacement: qdrant_telemetry_${1}
+
+---
+# ================================================================================================
+# INGRESS CONFIGURATION (OPTIONAL)
+# ================================================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: qdrant-ingress
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: ingress
+  annotations:
+    # NGINX Ingress annotations
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-body-size: "128m"
+    nginx.ingress.kubernetes.io/rate-limit: "1000"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    
+    # SSL and security
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-protocols: "TLSv1.2 TLSv1.3"
+    
+    # CORS headers for API access
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, PUT, POST, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
+    
+    # Authentication (optional)
+    # nginx.ingress.kubernetes.io/auth-type: basic
+    # nginx.ingress.kubernetes.io/auth-secret: qdrant-basic-auth
+    
+    # Certificate manager
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - qdrant.yourdomain.com  # Replace with your domain
+    secretName: qdrant-tls-secret
+  rules:
+  - host: qdrant.yourdomain.com  # Replace with your domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: qdrant-service
+            port:
+              number: 6333
+
+---
+# ================================================================================================
+# NETWORK POLICY FOR SECURITY
+# ================================================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: qdrant-network-policy
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress rules
+  ingress:
+  # Allow traffic from AI inference server
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ai-inference-system
+    ports:
+    - protocol: TCP
+      port: 6333
+    - protocol: TCP
+      port: 6334
+  
+  # Allow traffic from monitoring namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 6333
+  
+  # Allow traffic from ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 6333
+  
+  # Allow inter-pod communication within namespace
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: qdrant
+    ports:
+    - protocol: TCP
+      port: 6333
+    - protocol: TCP
+      port: 6334
+  
+  # Egress rules
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  
+  # Allow HTTPS for external services
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  # Allow communication within the cluster
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 6333
+    - protocol: TCP
+      port: 6334
+
+---
+# ================================================================================================
+# SERVICE ACCOUNT AND RBAC
+# ================================================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: qdrant-service-account
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: service-account
+automountServiceAccountToken: false
+
+---
+# Role for Qdrant service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: qdrant-role
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: rbac
+rules:
+# Read access to configmaps and secrets
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+
+# Limited access to pods for health checking
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+
+---
+# Role binding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: qdrant-role-binding
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: rbac
+subjects:
+- kind: ServiceAccount
+  name: qdrant-service-account
+  namespace: qdrant-system
+roleRef:
+  kind: Role
+  name: qdrant-role
+  apiGroup: rbac.authorization.k8s.io

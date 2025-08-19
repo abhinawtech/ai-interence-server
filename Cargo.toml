@@ -3,6 +3,9 @@ name = "ai-interence-server"
 version = "0.1.0"
 edition = "2021"  # COMPATIBILITY: Rust 2021 edition provides stable feature set
 
+
+
+
 [dependencies]
 axum = "0.8.4"
 tokio = { version = "1.0", features = ["full"] }
@@ -12,25 +15,41 @@ tokio = { version = "1.0", features = ["full"] }
 candle-core = { version = "0.9.1", features = ["metal", "accelerate"] }
 candle-nn = { version = "0.9.1", features = ["metal", "accelerate"] }
 candle-transformers = { version = "0.9.1", features = ["metal", "accelerate"] }
-tokenizers = "0.21.4"
+tokenizers = "0.20"
 # OPTIMIZATION: Dependency Minimization for Faster Compilation
 # Removed unused ML libraries to reduce compile time and binary size
 # ort = "1.16.3"        # ONNX Runtime - not needed for Candle-based inference
 # ndarray = "0.16"      # NumPy-like arrays - Candle provides tensor operations
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+regex = "1.10"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 anyhow = "1.0.99"
-uuid = { version = "1.18.0", features = ["v4"] }
-hf-hub = "0.4.3"
-thiserror = "2.0.14"
+uuid = { version = "1.18.0", features = ["v4", "serde"] }
+async-trait = "0.1"
+hf-hub = { version = "0.3", features = ["tokio"] }
+thiserror = "2.0.15"
 chrono = { version = "0.4", features = ["serde"] }
 tower = { version = "0.5.2", features = ["util"] }
 dotenv = "0.15"
+reqwest = { version = "0.12.23", features = ["json"] }
+url = "2.5"
+toml = "0.9.5"
+rand = "0.9.2"
+tempfile = "3.0"
+clap = { version = "4.0", features = ["derive"] }
+# QDRANT: Vector Database Dependencies
+qdrant-client = "1.10.1"
+tonic = "0.14.1"
+prost = "0.14.1"
 # rayon = "1.10.0"      # CONCURRENCY: Removed to avoid thread pool conflicts
                           # Rayon's work-stealing can interfere with Tokio's async executor
                           # Tokio handles parallelism for I/O, Candle handles compute parallelism
+
+[[bin]]
+name = "test_health_api"
+path = "test_health_api.rs"
 
 [features]
 default = []

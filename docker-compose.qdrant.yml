@@ -1,0 +1,259 @@
+# ================================================================================================
+# QDRANT VECTOR DATABASE - DOCKER COMPOSE SETUP FOR LOCAL DEVELOPMENT
+# ================================================================================================
+#
+# PURPOSE:
+# Complete local development environment for Qdrant vector database optimized for AI workloads
+# with persistent storage, health monitoring, and performance tuning for embedding operations.
+#
+# FEATURES:
+# ✅ Persistent storage with named volumes
+# ✅ Health checks and monitoring endpoints
+# ✅ Optimized configuration for AI embedding workloads
+# ✅ HNSW indexing configuration for fast similarity search
+# ✅ Performance tuning for vector operations
+# ✅ Development-friendly networking and ports
+# ✅ Resource limits and memory optimization
+# ✅ Logging configuration for debugging
+#
+# USAGE:
+# docker-compose -f docker-compose.qdrant.yml up -d
+# docker-compose -f docker-compose.qdrant.yml down
+#
+# MONITORING:
+# - Qdrant API: http://localhost:6333
+# - Qdrant Web UI: http://localhost:6333/dashboard
+# - Health Check: http://localhost:6333/health
+# - Metrics: http://localhost:6333/metrics
+#
+# ================================================================================================
+
+version: '3.8'
+
+services:
+  # ================================================================================================
+  # QDRANT VECTOR DATABASE SERVICE
+  # ================================================================================================
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    container_name: qdrant-dev
+    restart: unless-stopped
+    
+    # ============================================================================================
+    # PORT CONFIGURATION
+    # ============================================================================================
+    ports:
+      - "6333:6333"   # HTTP API and Web UI
+      - "6334:6334"   # gRPC API (optional, for high-performance clients)
+    
+    # ============================================================================================
+    # VOLUME MOUNTS FOR PERSISTENCE
+    # ============================================================================================
+    volumes:
+      # Persistent storage for vector collections and indices
+      - qdrant_storage:/qdrant/storage
+      # Configuration file for custom settings
+      - ./config/qdrant/production.yaml:/qdrant/config/production.yaml:ro
+      # Snapshots directory for backup/restore
+      - qdrant_snapshots:/qdrant/snapshots
+      # Logs directory for debugging
+      - qdrant_logs:/qdrant/logs
+    
+    # ============================================================================================
+    # ENVIRONMENT CONFIGURATION
+    # ============================================================================================
+    environment:
+      # Performance and Memory Settings
+      QDRANT__LOG_LEVEL: INFO
+      QDRANT__HTTP_PORT: 6333
+      QDRANT__GRPC_PORT: 6334
+      
+      # Storage Configuration
+      QDRANT__STORAGE__STORAGE_PATH: /qdrant/storage
+      QDRANT__STORAGE__SNAPSHOTS_PATH: /qdrant/snapshots
+      QDRANT__STORAGE__TEMP_PATH: /tmp/qdrant
+      
+      # Performance Optimization for AI Workloads
+      QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS: 4
+      QDRANT__STORAGE__PERFORMANCE__MAX_OPTIMIZATION_THREADS: 2
+      QDRANT__STORAGE__PERFORMANCE__INDEXING_THRESHOLD: 20000
+      
+      # Memory Management
+      QDRANT__STORAGE__MEMORY__GLOBAL_M: 32
+      QDRANT__STORAGE__MEMORY__GLOBAL_EF_CONSTRUCT: 512
+      QDRANT__STORAGE__MEMORY__GLOBAL_EF: 256
+      
+      # HNSW Index Optimization
+      QDRANT__STORAGE__HNSW__M: 48
+      QDRANT__STORAGE__HNSW__EF_CONSTRUCT: 512
+      QDRANT__STORAGE__HNSW__FULL_SCAN_THRESHOLD: 10000
+      QDRANT__STORAGE__HNSW__MAX_INDEXING_THREADS: 4
+      
+      # Clustering and Replication (for development)
+      QDRANT__CLUSTER__ENABLED: false
+      
+      # API Configuration
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__SERVICE__ENABLE_CORS: true
+      QDRANT__SERVICE__MAX_REQUEST_SIZE_MB: 64
+      QDRANT__SERVICE__MAX_WORKERS: 4
+      
+      # Security Settings (development mode)
+      QDRANT__SERVICE__API_KEY: ""  # No API key for local development
+      QDRANT__SERVICE__READ_ONLY: false
+      
+      # Telemetry and Monitoring
+      QDRANT__TELEMETRY_DISABLED: false
+      
+      # Development Optimizations
+      QDRANT__STORAGE__WAL__WAL_CAPACITY_MB: 32
+      QDRANT__STORAGE__WAL__WAL_SEGMENTS_AHEAD: 2
+      QDRANT__STORAGE__OPTIMIZERS__DELETED_THRESHOLD: 0.2
+      QDRANT__STORAGE__OPTIMIZERS__VACUUM_MIN_VECTOR_NUMBER: 1000
+      QDRANT__STORAGE__OPTIMIZERS__DEFAULT_SEGMENT_NUMBER: 2
+      QDRANT__STORAGE__OPTIMIZERS__MAX_SEGMENT_SIZE_MB: 100
+      QDRANT__STORAGE__OPTIMIZERS__MEMMAP_THRESHOLD_MB: 10
+      QDRANT__STORAGE__OPTIMIZERS__INDEXING_THRESHOLD_MB: 20
+      
+    # ============================================================================================
+    # RESOURCE LIMITS (Development Optimized)
+    # ============================================================================================
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'      # Limit to 2 CPU cores for development
+          memory: 4G       # 4GB memory limit for vector operations
+        reservations:
+          cpus: '0.5'      # Reserve at least 0.5 CPU cores
+          memory: 1G       # Reserve at least 1GB memory
+    
+    # ============================================================================================
+    # HEALTH CHECK CONFIGURATION
+    # ============================================================================================
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    # ============================================================================================
+    # NETWORKING
+    # ============================================================================================
+    networks:
+      - qdrant-network
+    
+    # ============================================================================================
+    # LOGGING CONFIGURATION
+    # ============================================================================================
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+        labels: "service=qdrant,environment=development"
+
+  # ================================================================================================
+  # QDRANT MONITORING AND MANAGEMENT TOOLS
+  # ================================================================================================
+  
+  # Qdrant Web UI (Alternative Dashboard)
+  qdrant-ui:
+    image: nginx:alpine
+    container_name: qdrant-ui-dev
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./config/qdrant/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    networks:
+      - qdrant-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# ================================================================================================
+# VOLUME DEFINITIONS
+# ================================================================================================
+volumes:
+  # Persistent storage for Qdrant collections and indices
+  qdrant_storage:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/qdrant/storage
+  
+  # Backup and snapshot storage
+  qdrant_snapshots:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/qdrant/snapshots
+  
+  # Application logs
+  qdrant_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/qdrant/logs
+
+# ================================================================================================
+# NETWORK DEFINITIONS
+# ================================================================================================
+networks:
+  qdrant-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+
+# ================================================================================================
+# DEVELOPMENT USAGE EXAMPLES
+# ================================================================================================
+#
+# 1. START SERVICES:
+#    docker-compose -f docker-compose.qdrant.yml up -d
+#
+# 2. VIEW LOGS:
+#    docker-compose -f docker-compose.qdrant.yml logs -f qdrant
+#
+# 3. ACCESS QDRANT API:
+#    curl http://localhost:6333/health
+#    curl http://localhost:6333/collections
+#
+# 4. CREATE A COLLECTION (Example):
+#    curl -X PUT http://localhost:6333/collections/embeddings \
+#         -H "Content-Type: application/json" \
+#         -d '{
+#           "vectors": {
+#             "size": 384,
+#             "distance": "Cosine",
+#             "hnsw_config": {
+#               "m": 48,
+#               "ef_construct": 512,
+#               "full_scan_threshold": 10000
+#             }
+#           }
+#         }'
+#
+# 5. BACKUP DATA:
+#    docker exec qdrant-dev curl -X POST http://localhost:6333/snapshots
+#
+# 6. STOP SERVICES:
+#    docker-compose -f docker-compose.qdrant.yml down
+#
+# 7. CLEAN UP (REMOVE DATA):
+#    docker-compose -f docker-compose.qdrant.yml down -v
+#
+# ================================================================================================

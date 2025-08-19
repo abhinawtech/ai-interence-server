@@ -35,6 +35,7 @@ use tokio::{
     time::Instant,
 };
 use uuid::Uuid;
+// Remove the UnifiedModel trait import since we're using ModelInstance directly
 
 // REQUEST: BatchRequest - Individual Request Container
 // Encapsulates a single inference request with all necessary context:
@@ -100,7 +101,7 @@ impl Default for BatchConfig {
 pub struct BatchProcessor {
     config: BatchConfig,
     request_queue: Arc<Mutex<VecDeque<BatchRequest>>>,
-    model: Option<Arc<Mutex<crate::models::TinyLlamaModel>>>,
+    model: Option<Arc<Mutex<crate::models::ModelInstance>>>,
     version_manager: Option<Arc<crate::models::ModelVersionManager>>,
     stats: Arc<Mutex<BatchStats>>,
 }
@@ -114,7 +115,7 @@ pub struct BatchStats {
 }
 
 impl BatchProcessor {
-    pub fn new(config: BatchConfig, model: Arc<Mutex<crate::models::TinyLlamaModel>>) -> Self {
+    pub fn new(config: BatchConfig, model: Arc<Mutex<crate::models::ModelInstance>>) -> Self {
         Self {
             config,
             request_queue: Arc::new(Mutex::new(VecDeque::new())),
@@ -137,7 +138,7 @@ impl BatchProcessor {
         }
     }
 
-    async fn get_active_model(&self) -> Result<Arc<Mutex<crate::models::TinyLlamaModel>>> {
+    async fn get_active_model(&self) -> Result<Arc<Mutex<crate::models::ModelInstance>>> {
         if let Some(ref version_manager) = self.version_manager {
             version_manager.get_active_model().await
                 .ok_or_else(|| anyhow::anyhow!("No active model available"))
@@ -410,5 +411,14 @@ impl BatchProcessor {
     pub async fn get_queue_size(&self) -> usize {
         let queue = self.request_queue.lock().await;
         queue.len()
+    }
+
+    pub async fn get_active_model_info(&self) -> Result<crate::models::ModelInfo> {
+        tracing::debug!("🔍 Getting active model info...");
+        let active_model = self.get_active_model().await?;
+        let model = active_model.lock().await;
+        let model_info = model.model_info();
+        tracing::debug!("🔍 Active model info: name={}, type={}", model_info.name, model_info.model_type);
+        Ok(model_info)
     }
 }

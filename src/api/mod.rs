@@ -35,3 +35,4 @@
 pub mod generate;  // Inference endpoints - core text generation functionality
 pub mod health;    // Health monitoring - service status and uptime checks  
 pub mod models;    // Model management - lifecycle, swapping, and administration
+pub mod vectors;   // Vector database operations - simple implementation

@@ -5,6 +5,7 @@ pub mod error;
 pub mod errors;
 pub mod models;
 pub mod security;
+pub mod vector;
 
 pub use config::Config;
 pub use error::{Error, Result};

@@ -1,0 +1,243 @@
+# ================================================================================================
+# QDRANT PERSISTENT STORAGE CONFIGURATION
+# ================================================================================================
+#
+# PURPOSE:
+# Production-grade persistent storage configuration for Qdrant vector database with:
+# - High-performance storage classes optimized for vector operations
+# - Persistent volume claims for data, snapshots, and WAL
+# - Storage policies for backup and disaster recovery
+#
+# FEATURES:
+# ✅ SSD-optimized storage classes for performance
+# ✅ Separate volumes for data, snapshots, and WAL
+# ✅ Backup and snapshot storage configuration
+# ✅ Storage encryption and security policies
+# ✅ Multi-zone storage for high availability
+#
+# ================================================================================================
+
+# ================================================================================================
+# STORAGE CLASS FOR HIGH-PERFORMANCE VECTOR OPERATIONS
+# ================================================================================================
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: qdrant-fast-ssd
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: storage
+    performance-tier: high
+annotations:
+  storageclass.kubernetes.io/is-default-class: "false"
+provisioner: kubernetes.io/aws-ebs  # Change to your cloud provider's provisioner
+parameters:
+  type: gp3                          # High-performance SSD (AWS)
+  fsType: ext4
+  encrypted: "true"
+  iops: "3000"                       # High IOPS for vector operations
+  throughput: "250"                  # High throughput (MB/s)
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+
+---
+# ================================================================================================
+# STORAGE CLASS FOR BACKUP AND SNAPSHOTS
+# ================================================================================================
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: qdrant-backup-storage
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: backup
+    performance-tier: standard
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp2                          # Standard SSD for backups
+  fsType: ext4
+  encrypted: "true"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+
+---
+# ================================================================================================
+# PERSISTENT VOLUME CLAIM - MAIN DATA STORAGE
+# ================================================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-data-pvc
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: data-storage
+    app.kubernetes.io/instance: qdrant-main
+    storage-type: primary
+  annotations:
+    volume.beta.kubernetes.io/storage-class: qdrant-fast-ssd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 200Gi  # Adjust based on expected vector data size
+  storageClassName: qdrant-fast-ssd
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+      storage-type: primary
+
+---
+# ================================================================================================
+# PERSISTENT VOLUME CLAIM - SNAPSHOTS AND BACKUPS
+# ================================================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-snapshots-pvc
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: backup-storage
+    app.kubernetes.io/instance: qdrant-main
+    storage-type: backup
+  annotations:
+    volume.beta.kubernetes.io/storage-class: qdrant-backup-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi  # Backup storage capacity
+  storageClassName: qdrant-backup-storage
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+      storage-type: backup
+
+---
+# ================================================================================================
+# PERSISTENT VOLUME CLAIM - WRITE-AHEAD LOG (WAL)
+# ================================================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-wal-pvc
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: wal-storage
+    app.kubernetes.io/instance: qdrant-main
+    storage-type: wal
+  annotations:
+    volume.beta.kubernetes.io/storage-class: qdrant-fast-ssd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi   # WAL storage (high-speed writes)
+  storageClassName: qdrant-fast-ssd
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+      storage-type: wal
+
+---
+# ================================================================================================
+# VOLUME SNAPSHOT CLASS FOR BACKUP AUTOMATION
+# ================================================================================================
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: qdrant-snapshot-class
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: backup
+  annotations:
+    snapshot.storage.kubernetes.io/is-default-class: "false"
+driver: ebs.csi.aws.com  # Change to your CSI driver
+deletionPolicy: Retain
+parameters:
+  encrypted: "true"
+
+---
+# ================================================================================================
+# STORAGE MONITORING - VOLUME METRICS
+# ================================================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: qdrant-storage-monitoring
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: monitoring
+data:
+  storage-alerts.yaml: |
+    groups:
+    - name: qdrant-storage
+      rules:
+      - alert: QdrantStorageSpaceHigh
+        expr: (kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          component: qdrant-storage
+        annotations:
+          summary: "Qdrant storage space usage is high"
+          description: "Storage usage is {{ $value }}% on {{ $labels.persistentvolumeclaim }}"
+      
+      - alert: QdrantStorageSpaceCritical
+        expr: (kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) * 100 > 95
+        for: 2m
+        labels:
+          severity: critical
+          component: qdrant-storage
+        annotations:
+          summary: "Qdrant storage space critically high"
+          description: "Storage usage is {{ $value }}% on {{ $labels.persistentvolumeclaim }}"
+      
+      - alert: QdrantStorageIOHigh
+        expr: rate(container_fs_reads_total[5m]) + rate(container_fs_writes_total[5m]) > 1000
+        for: 5m
+        labels:
+          severity: warning
+          component: qdrant-storage
+        annotations:
+          summary: "High I/O operations on Qdrant storage"
+          description: "Storage I/O rate is {{ $value }} ops/sec"
+
+---
+# ================================================================================================
+# BACKUP POLICY CONFIGURATION
+# ================================================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: qdrant-backup-policy
+  namespace: qdrant-system
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: backup
+data:
+  backup-schedule: "0 2 * * *"  # Daily backup at 2 AM
+  retention-days: "30"          # Keep backups for 30 days
+  backup-script.sh: |
+    #!/bin/bash
+    # Automated backup script for Qdrant
+    set -e
+    
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_NAME="qdrant-backup-${TIMESTAMP}"
+    
+    echo "Starting Qdrant backup: ${BACKUP_NAME}"
+    
+    # Create snapshot via Qdrant API
+    kubectl exec -n qdrant-system deployment/qdrant -- \
+      curl -X POST http://localhost:6333/snapshots
+    
+    echo "Backup completed: ${BACKUP_NAME}"

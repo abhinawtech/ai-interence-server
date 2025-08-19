@@ -38,6 +38,7 @@ use serde_json::Value;
 use std::fs;
 use tokenizers::Tokenizer;
 use std::sync::Arc;
+use crate::models::ModelInfo;
 
 // STRUCTURE: TinyLlamaModel - Core Inference Engine
 // Thread-safe wrapper around Candle's Llama implementation with optimizations:
@@ -45,6 +46,7 @@ use std::sync::Arc;
 // - Arc<Tokenizer>: HuggingFace tokenizer with thread-safe reference counting
 // - Device: GPU/CPU compute target for tensor operations  
 // - Config: Model architecture parameters for initialization
+#[derive(Debug)]
 pub struct TinyLlamaModel {
     model: Arc<Llama>,           // Thread-safe model reference for concurrent inference
     tokenizer: Arc<Tokenizer>,   // Shared tokenizer for text ↔ token conversion
@@ -425,6 +427,9 @@ impl TinyLlamaModel {
             device: format!("{:?}", self.device),
             vocab_size: self.config.vocab_size,
             context_length: self.config.max_position_embeddings,
+            model_type: "llama".to_string(),
+            architecture: "transformer".to_string(),
+            precision: "f16".to_string(),
         }
     }
 
@@ -450,20 +455,91 @@ impl TinyLlamaModel {
     }
 }
 
-// ANALYTICS: ModelInfo - Comprehensive Model Metadata
-// Provides operational visibility into model characteristics and resource usage:
-// - Essential for capacity planning and performance monitoring
-// - Used by health checks and system status endpoints
-// - Enables model comparison and optimization decisions
-#[derive(serde::Serialize, Debug)]
-pub struct ModelInfo {
-    pub name: String,           // Model identifier for logging and management
-    pub version: String,        // Version for tracking and rollback capabilities  
-    pub parameters: usize,      // Total parameter count (1.1B for TinyLlama)
-    pub memory_mb: usize,       // Estimated memory usage in megabytes
-    pub device: String,         // Compute device (Metal/CUDA/CPU) currently in use
-    pub vocab_size: usize,      // Tokenizer vocabulary size (32,000 for TinyLlama)
-    pub context_length: usize,  // Maximum sequence length (2,048 tokens)
+// NEW ARCHITECTURE: ModelTrait implementation for TinyLlama
+use crate::models::traits::{ModelTrait, BoxedModel};
+use async_trait::async_trait;
+
+#[async_trait]
+impl ModelTrait for TinyLlamaModel {
+    async fn load() -> Result<BoxedModel>
+    where
+        Self: Sized,
+    {
+        let model = Self::load().await?;
+        Ok(Box::new(model))
+    }
+
+    async fn generate(&mut self, prompt: &str, max_tokens: usize) -> Result<String> {
+        self.generate(prompt, max_tokens).await
+    }
+
+    fn model_info(&self) -> crate::models::traits::ModelInfo {
+        let info = self.model_info();
+        crate::models::traits::ModelInfo {
+            name: info.name,
+            version: info.version,
+            parameters: info.parameters,
+            memory_mb: info.memory_mb,
+            device: info.device,
+            vocab_size: info.vocab_size,
+            context_length: info.context_length,
+            model_type: info.model_type,
+            architecture: info.architecture,
+            precision: info.precision,
+        }
+    }
+
+    fn device(&self) -> &candle_core::Device {
+        &self.device
+    }
+
+    fn model_name(&self) -> &str {
+        "tinyllama-1.1b-chat"
+    }
+
+    fn supports_feature(&self, feature: &str) -> bool {
+        match feature {
+            "generation" => true,
+            "health_check" => true,
+            "fast_inference" => true,
+            "conversational" => true,
+            _ => false,
+        }
+    }
+}
+
+// Register TinyLlama model with the new registry
+pub fn register_tinyllama_model() -> anyhow::Result<()> {
+    use crate::models::registry::{global_registry, ModelRegistration};
+    use std::sync::Arc;
+
+    async fn tinyllama_factory() -> anyhow::Result<BoxedModel> {
+        let model = TinyLlamaModel::load().await?;
+        Ok(Box::new(model))
+    }
+
+    let registration = ModelRegistration {
+        name: "tinyllama-1.1b-chat".to_string(),
+        aliases: vec![
+            "tinyllama".to_string(),
+            "llama".to_string(),
+            "tiny".to_string(),
+            "fast".to_string(),
+        ],
+        description: "TinyLlama 1.1B Chat model - fast inference for development and testing".to_string(),
+        model_type: "llama".to_string(),
+        supported_features: vec![
+            "generation".to_string(),
+            "health_check".to_string(),
+            "fast_inference".to_string(),
+            "conversational".to_string(),
+        ],
+        memory_requirements_mb: 2200,
+        factory: Arc::new(Box::new(|| Box::new(Box::pin(tinyllama_factory())))),
+    };
+
+    global_registry().register_model(registration)?;
+    Ok(())
 }
 
 // IMPLEMENTATION NOTES:
