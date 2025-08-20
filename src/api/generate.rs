@@ -1,8 +1,10 @@
 use crate::{batching::BatchProcessor, errors::AppError, models::ModelInfo};
-use crate::vector::{VectorBackend, VectorPoint, create_simple_embedding};
+use crate::vector::{VectorBackend, VectorPoint, EmbeddingService};
+use crate::api::search::{SearchSessionManager, SemanticSearchRequest, SearchDomain, SearchFilters};
 use axum::{extract::State, response::Json};
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Instant, collections::HashMap};
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 // API DESIGN: Request Schema for Text Generation
@@ -15,6 +17,9 @@ pub struct GenerateRequest {
     pub use_memory: Option<bool>,    // Enable conversation memory (default: true)
     pub memory_limit: Option<usize>, // Number of past conversations to include (default: 3)
     pub model: Option<String>,       // Model to use (e.g., "tinyllama", "gemma") - uses default if not specified
+    pub session_id: Option<String>,  // Session ID for contextual memory (auto-generated if not provided)
+    pub memory_domains: Option<Vec<SearchDomain>>, // Specific memory domains to search
+    pub memory_quality_threshold: Option<f32>, // Minimum quality score for memory retrieval (default: 0.6)
 }
 
 // API DESIGN: Comprehensive Response with Performance Metrics
@@ -31,6 +36,10 @@ pub struct GenerateResponse {
     pub batch_processing: bool,          // Indicates batching was used
     pub memory_used: bool,               // Whether conversation memory was used
     pub context_retrieved: usize,        // Number of past conversations included
+    pub session_id: String,              // Session ID used for this generation
+    pub semantic_search_time_ms: Option<u64>, // Time spent on semantic search
+    pub memory_relevance_scores: Vec<f32>, // Relevance scores of retrieved memories
+    pub search_intent: Option<String>,   // Detected search intent for memory retrieval
 }
 
 impl GenerateRequest {
@@ -59,13 +68,18 @@ impl GenerateRequest {
     }
 }
 
-// State type for generate endpoint with conversation memory
-pub type GenerateState = (Arc<BatchProcessor>, Arc<VectorBackend>);
+// Enhanced state type for generate endpoint with semantic search integration
+pub type GenerateState = (
+    Arc<BatchProcessor>, 
+    Arc<VectorBackend>, 
+    Arc<RwLock<EmbeddingService>>, 
+    Arc<SearchSessionManager>
+);
 
-// ENDPOINT: Main Text Generation Handler with Conversation Memory
-// Implements async request processing with conversation context retrieval
+// ENDPOINT: Enhanced Text Generation Handler with Semantic Memory Integration
+// Implements intelligent conversation context retrieval using semantic search
 pub async fn generate_text(
-    State((batch_processor, vector_storage)): State<GenerateState>,
+    State((batch_processor, vector_backend, embedding_service, session_manager)): State<GenerateState>,
     Json(request): Json<GenerateRequest>,
 ) -> std::result::Result<Json<GenerateResponse>, AppError> {
     // ANALYTICS: End-to-end timing measurement
@@ -79,23 +93,81 @@ pub async fn generate_text(
     let max_tokens = request.max_tokens.unwrap_or(100);
     let use_memory = request.use_memory.unwrap_or(true);
     let memory_limit = request.memory_limit.unwrap_or(3);
+    let memory_quality_threshold = request.memory_quality_threshold.unwrap_or(0.6);
 
-    // CONVERSATION MEMORY: Retrieve relevant context from past conversations
+    // SESSION MANAGEMENT: Get or create session for contextual memory
+    let session_id = request.session_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+    let session = session_manager.get_or_create_session(Some(session_id.clone())).await;
+
+    // SEMANTIC MEMORY RETRIEVAL: Use intelligent search for context
     let mut context_retrieved = 0;
+    let mut semantic_search_time = None;
+    let mut memory_relevance_scores = Vec::new();
+    let mut detected_intent = None;
+    
     let final_prompt = if use_memory {
-        match retrieve_conversation_context(&vector_storage, &request.prompt, memory_limit).await {
-            Ok((context, count)) => {
-                context_retrieved = count;
-                if !context.is_empty() {
-                    // Improved formatting for better model understanding
-                    format!("Context from previous conversation:\n{}\n\nUser: {}\nAssistant:", 
-                           context, request.prompt)
+        let search_start = Instant::now();
+        
+        // Create semantic search request for memory retrieval
+        let memory_search_request = SemanticSearchRequest {
+            query: request.prompt.clone(),
+            session_id: Some(session_id.clone()),
+            limit: Some(memory_limit),
+            domains: Some(vec![SearchDomain::Conversations]),
+            filters: Some(SearchFilters {
+                time_range: None,
+                content_type: Some(vec!["conversation".to_string()]),
+                categories: None,
+                authors: None,
+                language: None,
+                quality_threshold: Some(memory_quality_threshold),
+            }),
+            include_suggestions: Some(false),
+            personalize: Some(true),
+        };
+
+        // Perform semantic search for conversation memory
+        match perform_semantic_memory_search(
+            &vector_backend,
+            &embedding_service,
+            &session_manager,
+            memory_search_request,
+        ).await {
+            Ok(search_response) => {
+                let search_time = search_start.elapsed().as_millis() as u64;
+                semantic_search_time = Some(search_time);
+                context_retrieved = search_response.results.len();
+                
+                // Extract relevance scores and intent
+                memory_relevance_scores = search_response.results.iter().map(|r| r.score).collect();
+                detected_intent = search_response.session_context
+                    .and_then(|ctx| ctx.search_intent)
+                    .map(|intent| format!("{:?}", intent));
+                
+                if !search_response.results.is_empty() {
+                    // Build intelligent context from search results
+                    let context_parts: Vec<String> = search_response.results
+                        .into_iter()
+                        .filter_map(|result| {
+                            result.metadata.get("conversation").cloned()
+                        })
+                        .collect();
+                    
+                    let context = context_parts.join("\n---\n");
+                    tracing::info!("🧠 Retrieved {} conversations via semantic search (avg relevance: {:.3})", 
+                                  context_retrieved, 
+                                  memory_relevance_scores.iter().sum::<f32>() / memory_relevance_scores.len().max(1) as f32);
+                    
+                    // Enhanced prompt formatting optimized for TinyLlama
+                    format!("Context: {}\n\nBased on the above context, please respond to:\nUser: {}\nAssistant:", 
+                           context.replace("User:", "").replace("Assistant:", "").trim(), request.prompt)
                 } else {
+                    tracing::info!("🔍 No relevant conversations found via semantic search");
                     request.prompt.clone()
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to retrieve conversation context: {}", e);
+                tracing::warn!("❌ Semantic memory search failed: {}", e);
                 request.prompt.clone()
             }
         }
@@ -165,9 +237,9 @@ pub async fn generate_text(
     // MONITORING: Structured Request Completion Log
     // Essential for performance tuning and capacity planning
     // Helps identify bottlenecks: queue vs processing time
-    // ENTERPRISE CONVERSATION STORAGE: Quality-filtered storage
+    // ENHANCED CONVERSATION STORAGE: Quality-filtered storage with semantic embedding
     if use_memory {
-        let conversation_text = format!("User: {}\nAssistant: {}", request.prompt, batch_response.text);
+        let conversation_text = format!("{} -> {}", request.prompt, batch_response.text);
         
         // Enterprise quality gate before storage
         let response_quality = assess_context_quality(&batch_response.text);
@@ -175,9 +247,17 @@ pub async fn generate_text(
                       response_quality, batch_response.text.len());
         
         if response_quality > 0.4 { // Enterprise storage threshold
-            tracing::info!("✅ High-quality response approved for storage");
-            if let Err(e) = store_conversation(&vector_storage, &conversation_text).await {
-                tracing::warn!("Failed to store conversation: {}", e);
+            tracing::info!("✅ High-quality response approved for semantic storage");
+            if let Err(e) = store_conversation_with_semantic_embedding(
+                &vector_backend,
+                &embedding_service,
+                &conversation_text,
+                &session_id,
+            ).await {
+                tracing::warn!("❌ Failed to store conversation with semantic embedding: {}", e);
+            } else {
+                // Update session with successful generation
+                session_manager.update_session(&session_id, &request.prompt, 1).await;
             }
         } else {
             tracing::warn!("🚫 Low-quality response rejected from storage (score: {:.2})", response_quality);
@@ -205,6 +285,10 @@ pub async fn generate_text(
         batch_processing: true,
         memory_used: use_memory,
         context_retrieved,
+        session_id,
+        semantic_search_time_ms: semantic_search_time,
+        memory_relevance_scores,
+        search_intent: detected_intent,
     }))
 }
 
@@ -335,131 +419,77 @@ fn assess_context_quality(conversation: &str) -> f32 {
     quality_score
 }
 
-/// Enterprise-grade context retrieval with intelligent filtering
-async fn retrieve_conversation_context(
+/// Perform semantic search for memory retrieval using the search API
+async fn perform_semantic_memory_search(
     vector_backend: &Arc<VectorBackend>,
-    prompt: &str,
-    limit: usize,
-) -> Result<(String, usize), String> {
-    tracing::info!("🔍 Starting enterprise conversation context retrieval for prompt: '{}'", prompt);
+    embedding_service: &Arc<RwLock<EmbeddingService>>,
+    session_manager: &Arc<SearchSessionManager>,
+    request: SemanticSearchRequest,
+) -> Result<crate::api::search::SemanticSearchResponse, String> {
+    use crate::api::search::{semantic_search, SearchApiState};
     
-    // Step 1: Enterprise Intent Classification
-    let intent = classify_query_intent(prompt);
-    tracing::info!("🎯 Query classified as: {:?}", intent);
+    tracing::info!("🔍 Performing semantic memory search for: '{}'", request.query);
     
-    // Step 2: Intent-based Context Strategy
-    let (should_retrieve, similarity_threshold, context_limit) = match intent {
-        QueryIntent::Personal => {
-            tracing::info!("👤 Personal query detected - retrieving user context");
-            (true, 0.3, limit) // Lower threshold, more context for personal queries
-        },
-        QueryIntent::Contextual => {
-            tracing::info!("🔗 Contextual query detected - retrieving conversation flow");
-            (true, 0.5, 2) // Medium threshold, limited context
-        },
-        QueryIntent::Task => {
-            tracing::info!("📋 Task query detected - retrieving recent relevant context");
-            (true, 0.6, 1) // Higher threshold, minimal context
-        },
-        QueryIntent::General => {
-            tracing::info!("🌐 General knowledge query detected - skipping context retrieval");
-            (false, 0.0, 0) // No context for general questions
+    // Create the search state tuple
+    let search_state: SearchApiState = (
+        Arc::clone(vector_backend),
+        Arc::clone(embedding_service),
+        Arc::clone(session_manager),
+    );
+    
+    // Perform the semantic search using the search API
+    match semantic_search(
+        axum::extract::State(search_state),
+        axum::Json(request),
+    ).await {
+        Ok(axum::Json(response)) => {
+            tracing::info!("✅ Semantic search completed: {} results found", response.results.len());
+            Ok(response)
         }
-    };
-    
-    // Step 3: Early return for general knowledge questions
-    if !should_retrieve {
-        tracing::info!("⚡ Bypassing context retrieval for general knowledge query");
-        return Ok((String::new(), 0));
-    }
-    
-    // Step 4: Vector Search with Enterprise Parameters
-    let embedding = create_simple_embedding(prompt, 64);
-    tracing::info!("🧠 Generated search embedding with {} dimensions", embedding.len());
-    
-    let results = vector_backend.search_similar(&embedding, context_limit * 2) // Get extra results for filtering
-        .await
-        .map_err(|e| {
-            tracing::error!("❌ Search error in conversation retrieval: {}", e);
-            format!("Search error: {}", e)
-        })?;
-    
-    tracing::info!("🔎 Found {} search results from vector backend", results.len());
-    
-    // Step 5: Enterprise Quality Filtering
-    let mut context_parts = Vec::new();
-    let mut count = 0;
-    
-    for (id, similarity) in results {
-        tracing::info!("📊 Result: ID={}, similarity={:.4}, threshold={:.4}", id, similarity, similarity_threshold);
-        
-        if similarity > similarity_threshold && count < context_limit {
-            if let Some(point) = vector_backend.get(&id).await {
-                tracing::info!("✅ Retrieved vector point for ID: {}", id);
-                if let Some(conversation) = point.metadata.get("conversation") {
-                    // Step 6: Enterprise Quality Assessment
-                    let quality_score = assess_context_quality(conversation);
-                    tracing::info!("🎯 Context quality score: {:.2} for conversation: '{}'", quality_score, 
-                                  &conversation.chars().take(50).collect::<String>());
-                    
-                    if quality_score > 0.5 { // Enterprise quality gate
-                        tracing::info!("✅ High-quality context accepted");
-                        context_parts.push(conversation.clone());
-                        count += 1;
-                    } else {
-                        tracing::warn!("🚫 Low-quality context rejected (score: {:.2})", quality_score);
-                    }
-                } else {
-                    tracing::warn!("⚠️ Vector point {} has no 'conversation' metadata", id);
-                }
-            } else {
-                tracing::warn!("⚠️ Could not retrieve vector point for ID: {}", id);
-            }
-        } else {
-            tracing::info!("🚫 Skipping result - similarity {:.4} below threshold {:.4} or limit reached", 
-                          similarity, similarity_threshold);
+        Err(status_code) => {
+            let error_msg = format!("Semantic search failed with status: {}", status_code);
+            tracing::error!("❌ {}", error_msg);
+            Err(error_msg)
         }
     }
-    
-    let context = if context_parts.is_empty() {
-        tracing::info!("📭 No relevant high-quality conversation context found");
-        String::new()
-    } else {
-        tracing::info!("📚 Found {} high-quality conversations for context", context_parts.len());
-        context_parts.join("\n---\n")
-    };
-    
-    tracing::info!("🎯 Enterprise context retrieval completed: {} contexts, intent: {:?}", count, intent);
-    Ok((context, count))
 }
 
-/// Store a conversation in vector storage for future retrieval
-async fn store_conversation(
+/// Enhanced conversation storage with semantic embedding
+async fn store_conversation_with_semantic_embedding(
     vector_backend: &Arc<VectorBackend>,
+    embedding_service: &Arc<RwLock<EmbeddingService>>,
     conversation: &str,
+    session_id: &str,
 ) -> Result<(), String> {
-    tracing::debug!("💾 Starting conversation storage");
+    tracing::info!("💾 Starting enhanced conversation storage with semantic embedding");
     tracing::debug!("📝 Conversation text length: {} characters", conversation.len());
     
-    let embedding = create_simple_embedding(conversation, 64);
-    tracing::debug!("🧠 Generated embedding with {} dimensions", embedding.len());
+    // Generate semantic embedding using the embedding service
+    let embedding_service = embedding_service.read().await;
+    let vector_point = embedding_service.create_vector_point(conversation, {
+        let mut metadata = HashMap::new();
+        metadata.insert("conversation".to_string(), conversation.to_string());
+        metadata.insert("timestamp".to_string(), chrono::Utc::now().to_rfc3339());
+        metadata.insert("type".to_string(), "conversation".to_string());
+        metadata.insert("session_id".to_string(), session_id.to_string());
+        metadata.insert("source".to_string(), "generate_api".to_string());
+        metadata
+    }).await.map_err(|e| format!("Failed to create vector point: {}", e))?;
     
-    let mut metadata = HashMap::new();
-    metadata.insert("conversation".to_string(), conversation.to_string());
-    metadata.insert("timestamp".to_string(), chrono::Utc::now().to_rfc3339());
-    metadata.insert("type".to_string(), "conversation".to_string());
+    drop(embedding_service);
     
-    let point = VectorPoint::with_metadata(embedding, metadata);
-    tracing::debug!("📦 Created vector point with ID: {}", point.id);
+    tracing::debug!("📦 Created semantic vector point with ID: {}", vector_point.id);
     
-    match vector_backend.insert(point.clone()).await {
+    // Insert the vector point
+    match vector_backend.insert(vector_point).await {
         Ok(id) => {
-            tracing::info!("✅ Conversation stored successfully with ID: {}", id);
+            tracing::info!("✅ Conversation stored successfully with semantic embedding, ID: {}", id);
             Ok(())
         }
         Err(e) => {
-            tracing::error!("❌ Failed to store conversation: {}", e);
-            Err(format!("Insert error: {}", e))
+            let error_msg = format!("Failed to insert conversation vector: {}", e);
+            tracing::error!("❌ {}", error_msg);
+            Err(error_msg)
         }
     }
 }

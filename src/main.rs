@@ -255,7 +255,7 @@ async fn main() -> anyhow::Result<()> {
     // SEMANTIC SEARCH API: Session-Aware Intelligent Search Engine
     tracing::info!("🧠 Initializing semantic search engine with session management...");
     let search_session_manager = Arc::new(SearchSessionManager::new());
-    let search_api_state = (Arc::clone(&vector_backend), embedding_service_state, search_session_manager);
+    let search_api_state = (Arc::clone(&vector_backend), embedding_service_state.clone(), search_session_manager.clone());
     let search_router = create_search_router().with_state(search_api_state);
     tracing::info!("✅ Semantic search API initialized with contextual search capabilities");
 
@@ -265,12 +265,18 @@ async fn main() -> anyhow::Result<()> {
     // - Model management router handles lifecycle operations with dual state access
     // - State isolation prevents cross-contamination and improves maintainability
     
-    // INFERENCE: High-Performance Generation Router with Conversation Memory
-    // Optimized for low-latency inference operations with context awareness:
-    // - Shared BatchProcessor and VectorBackend state for memory integration
-    // - Health check endpoint for load balancer integration
-    // - POST /generate endpoint with conversation memory and batching support
-    let generate_state: GenerateState = (Arc::clone(&batch_processor), Arc::clone(&vector_backend));
+    // INFERENCE: Enhanced Generation Router with Semantic Memory Integration
+    // Optimized for intelligent conversation context retrieval and session management:
+    // - BatchProcessor for high-performance text generation
+    // - VectorBackend for conversation storage and retrieval
+    // - EmbeddingService for semantic understanding
+    // - SearchSessionManager for contextual memory tracking
+    let generate_state: GenerateState = (
+        Arc::clone(&batch_processor), 
+        Arc::clone(&vector_backend),
+        embedding_service_state.clone(),
+        search_session_manager.clone()
+    );
     let generation_router = Router::new()
         .route("/health", get(health_check))
         .route("/api/v1/generate", post(generate_text))

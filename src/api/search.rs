@@ -375,12 +375,26 @@ pub async fn semantic_search(
         .await
         .unwrap_or_default();
 
-    // Process and enhance results
+    // Process and enhance results with session filtering
     let mut search_results = Vec::new();
-    for (id, similarity) in similar_results.into_iter().take(limit) {
+    for (id, similarity) in similar_results.into_iter() {
         if let Some(point) = vector_backend.get(&id).await {
-            let result = create_search_result(id, similarity, point, &request.query).await;
-            search_results.push(result);
+            // Filter by session_id if provided
+            let matches_session = if let Some(ref session_id) = request.session_id {
+                point.metadata.get("session_id").map(|s| s == session_id).unwrap_or(false)
+            } else {
+                true // No session filter, include all results
+            };
+            
+            if matches_session {
+                let result = create_search_result(id, similarity, point, &request.query).await;
+                search_results.push(result);
+                
+                // Stop when we have enough results
+                if search_results.len() >= limit {
+                    break;
+                }
+            }
         }
     }
 
@@ -451,14 +465,25 @@ pub async fn contextual_search(
         .await
         .unwrap_or_default();
 
-    // Process results with context awareness
+    // Process results with context awareness and session filtering
     let mut search_results = Vec::new();
-    for (id, similarity) in similar_results.into_iter().take(10) {
+    for (id, similarity) in similar_results.into_iter() {
         if let Some(point) = vector_backend.get(&id).await {
-            let mut result = create_search_result(id, similarity, point, &request.query).await;
-            // Boost relevance if matches session context
-            result.score = boost_contextual_relevance(result.score, &result, &session);
-            search_results.push(result);
+            // Filter by session_id for contextual search (required session_id)
+            let matches_session = point.metadata.get("session_id")
+                .map(|s| s == &request.session_id).unwrap_or(false);
+            
+            if matches_session {
+                let mut result = create_search_result(id, similarity, point, &request.query).await;
+                // Boost relevance if matches session context
+                result.score = boost_contextual_relevance(result.score, &result, &session);
+                search_results.push(result);
+                
+                // Stop when we have enough results
+                if search_results.len() >= 10 {
+                    break;
+                }
+            }
         }
     }
 
