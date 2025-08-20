@@ -24,6 +24,7 @@ use ai_interence_server::api::generate::{generate_text, GenerateState};
 use ai_interence_server::api::health::health_check;
 use ai_interence_server::api::models::*;
 use ai_interence_server::api::vectors::create_vector_router;
+use ai_interence_server::api::vectors_enhanced::create_enhanced_vector_router;
 use ai_interence_server::api::embedding::{create_embedding_router, create_embedding_service_with_model};
 use ai_interence_server::batching::{BatchConfig, BatchProcessor};
 use ai_interence_server::vector::{VectorStorageFactory, EmbeddingConfig};
@@ -241,8 +242,14 @@ async fn main() -> anyhow::Result<()> {
     let embedding_service = create_embedding_service_with_model(active_model, Some(embedding_config)).await;
     let embedding_service_state = Arc::new(tokio::sync::RwLock::new(embedding_service));
     
-    let embedding_router = create_embedding_router().with_state(embedding_service_state);
+    let embedding_router = create_embedding_router().with_state(embedding_service_state.clone());
     tracing::info!("✅ Embedding service initialized with semantic processing capabilities");
+
+    // ENHANCED VECTOR API: Semantic Search and Advanced Filtering
+    tracing::info!("🔍 Setting up enhanced vector API with semantic search...");
+    let enhanced_vector_state = (Arc::clone(&vector_backend), embedding_service_state);
+    let enhanced_vector_router = create_enhanced_vector_router().with_state(enhanced_vector_state);
+    tracing::info!("✅ Enhanced vector API initialized with semantic search capabilities");
 
     // ARCHITECTURE: Modular Router Design with State Separation
     // Implements clean separation of concerns via dedicated router modules:
@@ -287,6 +294,7 @@ async fn main() -> anyhow::Result<()> {
     let app = generation_router
         .merge(models_router)
         .merge(vector_router)
+        .merge(enhanced_vector_router)
         .merge(embedding_router);
 
     let port: u16 = std::env::var("PORT")
@@ -312,6 +320,12 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("    • GET  /api/v1/vectors/{{id}} - Get vector by ID");
     tracing::info!("    • DELETE /api/v1/vectors/{{id}} - Delete vector");
     tracing::info!("    • GET  /api/v1/vectors/stats - Storage statistics");
+    tracing::info!("  🔷 ENHANCED SEMANTIC SEARCH:");
+    tracing::info!("    • POST /api/v1/vectors/text - Insert text as vector");
+    tracing::info!("    • POST /api/v1/vectors/search/semantic - Natural language search");
+    tracing::info!("    • POST /api/v1/vectors/search/advanced - Advanced filtered search");
+    tracing::info!("    • POST /api/v1/vectors/analyze - Query analysis and suggestions");
+    tracing::info!("    • GET  /api/v1/vectors/stats/enhanced - Enhanced statistics");
     tracing::info!("  🔷 EMBEDDING SERVICE:");
     tracing::info!("    • POST /api/v1/embed - Convert text to vector");
     tracing::info!("    • POST /api/v1/embed/batch - Batch text embedding");
