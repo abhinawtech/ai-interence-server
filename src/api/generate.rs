@@ -91,13 +91,22 @@ pub async fn generate_text(
 
     // DEFAULTS: Reasonable token limit for responsive service
     let max_tokens = request.max_tokens.unwrap_or(100);
-    let use_memory = request.use_memory.unwrap_or(true);
+    let use_memory = request.use_memory.unwrap_or(false); // 🚀 PERFORMANCE: Default to no memory for faster responses
     let memory_limit = request.memory_limit.unwrap_or(3);
     let memory_quality_threshold = request.memory_quality_threshold.unwrap_or(0.6);
 
-    // SESSION MANAGEMENT: Get or create session for contextual memory
-    let session_id = request.session_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-    let session = session_manager.get_or_create_session(Some(session_id.clone())).await;
+    // SESSION MANAGEMENT: Get or create session only if memory is enabled
+    let session_id = if use_memory {
+        request.session_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string())
+    } else {
+        "no-memory-session".to_string() // Dummy session for no-memory requests
+    };
+    let session = if use_memory {
+        session_manager.get_or_create_session(Some(session_id.clone())).await
+    } else {
+        // Don't create session if memory disabled
+        session_manager.get_or_create_session(None).await
+    };
 
     // SEMANTIC MEMORY RETRIEVAL: Use intelligent search for context
     let mut context_retrieved = 0;
@@ -248,17 +257,34 @@ pub async fn generate_text(
         
         if response_quality > 0.4 { // Enterprise storage threshold
             tracing::info!("✅ High-quality response approved for semantic storage");
-            if let Err(e) = store_conversation_with_semantic_embedding(
-                &vector_backend,
-                &embedding_service,
-                &conversation_text,
-                &session_id,
-            ).await {
-                tracing::warn!("❌ Failed to store conversation with semantic embedding: {}", e);
-            } else {
-                // Update session with successful generation
-                session_manager.update_session(&session_id, &request.prompt, 1).await;
-            }
+            
+            // 🚀 PERFORMANCE OPTIMIZATION: Async storage (non-blocking)
+            // Store conversation in background to prevent blocking user response
+            let vector_backend_clone = Arc::clone(&vector_backend);
+            let embedding_service_clone = Arc::clone(&embedding_service);
+            let conversation_text_clone = conversation_text.clone();
+            let session_id_clone = session_id.clone();
+            let session_manager_clone = Arc::clone(&session_manager);
+            let request_prompt_clone = request.prompt.clone();
+            
+            tokio::spawn(async move {
+                match store_conversation_with_semantic_embedding(
+                    &vector_backend_clone,
+                    &embedding_service_clone,
+                    &conversation_text_clone,
+                    &session_id_clone,
+                ).await {
+                    Ok(_) => {
+                        session_manager_clone.update_session(&session_id_clone, &request_prompt_clone, 1).await;
+                        tracing::info!("💾 Background storage completed successfully");
+                    }
+                    Err(e) => {
+                        tracing::warn!("❌ Background storage failed: {}", e);
+                    }
+                }
+            });
+            
+            tracing::info!("⚡ Response sent immediately, conversation storage in background");
         } else {
             tracing::warn!("🚫 Low-quality response rejected from storage (score: {:.2})", response_quality);
         }
