@@ -7,7 +7,7 @@ edition = "2021"  # COMPATIBILITY: Rust 2021 edition provides stable feature set
 
 
 [dependencies]
-axum = "0.8.4"
+axum = { version = "0.8.4", features = ["macros", "multipart"] }
 tokio = { version = "1.0", features = ["full"] }
 # OPTIMIZATION: Cross-platform GPU Acceleration Features
 # Metal for Apple Silicon, accelerate for optimized CPU operations
@@ -29,7 +29,7 @@ anyhow = "1.0.99"
 uuid = { version = "1.18.0", features = ["v4", "serde"] }
 async-trait = "0.1"
 hf-hub = { version = "0.4.3", features = ["tokio"] }
-thiserror = "2.0.15"
+thiserror = "2.0.16"
 chrono = { version = "0.4", features = ["serde"] }
 tower = { version = "0.5.2", features = ["util"] }
 dotenv = "0.15"
@@ -37,15 +37,20 @@ reqwest = { version = "0.12.23", features = ["json"] }
 url = "2.5"
 toml = "0.9.5"
 rand = "0.9.2"
-tempfile = "3.0"
+tempfile = "3.21.0"
 clap = { version = "4.0", features = ["derive"] }
+futures = "0.3"
 # QDRANT: Vector Database Dependencies
-qdrant-client = "1.10.1"
+qdrant-client = "1.15.0"
 tonic = "0.14.1"
 prost = "0.14.1"
 # rayon = "1.10.0"      # CONCURRENCY: Removed to avoid thread pool conflicts
                           # Rayon's work-stealing can interfere with Tokio's async executor
                           # Tokio handles parallelism for I/O, Candle handles compute parallelism
+
+[[bin]]
+name = "upload_test_document"
+path = "upload_test_document.rs"
 
 [features]
 default = []

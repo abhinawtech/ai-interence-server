@@ -24,6 +24,9 @@ pub enum AppError {
 
     #[error("Batch processing error: {0}")]
     BatchProcessing(#[from] anyhow::Error),
+
+    #[error("Vector operation error: {0}")]
+    VectorOperationError(String),
 }
 
 impl IntoResponse for AppError {
@@ -38,6 +41,7 @@ impl IntoResponse for AppError {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Batch processing failed".to_string(),
             ),
+            AppError::VectorOperationError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 
         let body = Json(json!({

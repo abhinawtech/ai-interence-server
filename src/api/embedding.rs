@@ -27,7 +27,7 @@ use uuid::Uuid;
 // API TYPES
 // ================================================================================================
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct EmbedTextRequest {
     pub text: String,
     pub metadata: Option<HashMap<String, String>>,

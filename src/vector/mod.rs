@@ -14,6 +14,12 @@ pub mod qdrant_config;
 pub mod qdrant_client;
 pub mod qdrant_operations;
 pub mod storage_factory;
+pub mod index_optimizer;
+pub mod reindex_manager;
+pub mod index_monitor;
+pub mod document_ingestion;
+pub mod chunking_strategies;
+pub mod incremental_updates;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -27,6 +33,12 @@ pub use qdrant_config::QdrantConfig;
 pub use qdrant_client::{QdrantClient, QdrantClientBuilder};
 pub use qdrant_operations::{QdrantVectorStorage, QdrantStorageStats};
 pub use storage_factory::{VectorBackend, VectorStorageFactory, VectorStorageConfig};
+pub use index_optimizer::{IndexOptimizer, IndexProfile, IndexPerformanceMetrics, CollectionIndexConfig, create_index_optimizer};
+pub use reindex_manager::{ReindexManager, ReindexJobStatus, ReindexJobState, ReindexJobConfig, JobPriority, ResourceUsage, create_reindex_manager};
+pub use index_monitor::{IndexMonitor, PerformanceWindow, AlertSeverity, AlertRule, AlertComparison, ActiveAlert, HealthStatus, CollectionHealth, MetricDataPoint, create_index_monitor};
+pub use document_ingestion::{DocumentIngestionPipeline, RawDocument, ProcessedDocument, DocumentSection, DocumentFormat, SectionType, IngestionConfig, IngestionStats, IngestionError, create_document_pipeline, create_document_pipeline_with_config};
+pub use chunking_strategies::{IntelligentChunker, TextChunk, ChunkingStrategy, ChunkingConfig, ChunkingResult, BoundaryType, ChunkType, create_semantic_chunker, create_sliding_window_chunker, create_adaptive_chunker};
+pub use incremental_updates::{IncrementalUpdateManager, DocumentVersion, ChangeSummary, ChangeType, DeduplicationCandidate, DeduplicationStrategy, UpdateResult, IncrementalUpdateConfig, create_incremental_manager, create_incremental_manager_with_config};
 
 // ================================================================================================
 // BASIC TYPES
