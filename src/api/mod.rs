@@ -39,3 +39,4 @@ pub mod vectors;         // Vector database operations - simple implementation
 pub mod vectors_enhanced; // Enhanced vector operations - semantic search and filtering
 pub mod embedding;       // Text-to-vector embedding API - semantic processing
 pub mod search;          // Dedicated semantic search API - session-aware intelligent search
+pub mod index_management; // Index optimization and performance management - Day 9 implementation
