@@ -9,6 +9,7 @@
 
 pub mod storage;
 pub mod embedding;
+pub mod embedding_service;
 pub mod qdrant_config;
 pub mod qdrant_client;
 pub mod qdrant_operations;
@@ -21,6 +22,7 @@ use uuid::Uuid;
 // Re-export key types
 pub use storage::{VectorStorage, StorageStats};
 pub use embedding::create_simple_embedding;
+pub use embedding_service::{EmbeddingService, EmbeddingConfig, EmbeddingResult, EmbeddingMethod, EmbeddingServiceStats};
 pub use qdrant_config::QdrantConfig;
 pub use qdrant_client::{QdrantClient, QdrantClientBuilder};
 pub use qdrant_operations::{QdrantVectorStorage, QdrantStorageStats};

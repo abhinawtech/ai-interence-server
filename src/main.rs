@@ -24,8 +24,9 @@ use ai_interence_server::api::generate::{generate_text, GenerateState};
 use ai_interence_server::api::health::health_check;
 use ai_interence_server::api::models::*;
 use ai_interence_server::api::vectors::create_vector_router;
+use ai_interence_server::api::embedding::{create_embedding_router, create_embedding_service_with_model};
 use ai_interence_server::batching::{BatchConfig, BatchProcessor};
-use ai_interence_server::vector::{VectorStorageFactory};
+use ai_interence_server::vector::{VectorStorageFactory, EmbeddingConfig};
 use ai_interence_server::models::{ModelVersionManager, AtomicModelSwap, version_manager::ModelStatus, initialize_models};
 use axum::{
     Router,
@@ -226,6 +227,23 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("✅ Vector API router configured with {} backend", 
                    vector_backend.backend_type());
 
+    // EMBEDDING SERVICE: Text-to-Vector Conversion Pipeline
+    tracing::info!("🧠 Initializing embedding service with model integration...");
+    let embedding_config = EmbeddingConfig {
+        dimension: 64,
+        use_model_embeddings: true,
+        cache_size: 1000,
+        batch_size: 10,
+    };
+    
+    // Get active model for embedding service
+    let active_model = version_manager.get_active_model().await;
+    let embedding_service = create_embedding_service_with_model(active_model, Some(embedding_config)).await;
+    let embedding_service_state = Arc::new(tokio::sync::RwLock::new(embedding_service));
+    
+    let embedding_router = create_embedding_router().with_state(embedding_service_state);
+    tracing::info!("✅ Embedding service initialized with semantic processing capabilities");
+
     // ARCHITECTURE: Modular Router Design with State Separation
     // Implements clean separation of concerns via dedicated router modules:
     // - Generation router handles inference requests with BatchProcessor state
@@ -268,7 +286,8 @@ async fn main() -> anyhow::Result<()> {
     // - Enables independent testing and development of router modules
     let app = generation_router
         .merge(models_router)
-        .merge(vector_router);
+        .merge(vector_router)
+        .merge(embedding_router);
 
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "3000".to_string())
@@ -293,6 +312,11 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("    • GET  /api/v1/vectors/{{id}} - Get vector by ID");
     tracing::info!("    • DELETE /api/v1/vectors/{{id}} - Delete vector");
     tracing::info!("    • GET  /api/v1/vectors/stats - Storage statistics");
+    tracing::info!("  🔷 EMBEDDING SERVICE:");
+    tracing::info!("    • POST /api/v1/embed - Convert text to vector");
+    tracing::info!("    • POST /api/v1/embed/batch - Batch text embedding");
+    tracing::info!("    • POST /api/v1/embed/similarity - Text similarity");
+    tracing::info!("    • GET  /api/v1/embed/stats - Embedding statistics");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let server = axum::serve(listener, app);
