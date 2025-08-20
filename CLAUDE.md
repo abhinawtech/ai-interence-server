@@ -74,6 +74,7 @@ This is an enterprise-grade AI inference server with advanced vector database ca
 - `search.rs`: Session-aware semantic search with context
 - `index_management.rs`: Index optimization, background reindexing, and monitoring APIs
 - `models.rs`: Model lifecycle management with zero-downtime swapping
+- `document_processing.rs`: Document ingestion, chunking, and deduplication APIs
 
 #### `src/models/` - ML Model Management
 - `version_manager.rs`: Hot model swapping with health validation
@@ -87,6 +88,7 @@ This is an enterprise-grade AI inference server with advanced vector database ca
 - **Index Optimization**: `index_optimizer.rs` - Performance profile management (HighAccuracy/Balanced/FastQuery)  
 - **Background Jobs**: `reindex_manager.rs` - Zero-downtime reindexing with job queues
 - **Monitoring**: `index_monitor.rs` - Real-time performance metrics and alerting
+- **Document Processing**: `document_ingestion.rs`, `chunking_strategies.rs`, `incremental_updates.rs` - Document pipeline and intelligent chunking
 
 #### `src/batching/` - Performance Optimization
 Intelligent request batching for 2-4x throughput improvement on batch workloads.
@@ -117,6 +119,12 @@ Intelligent request batching for 2-4x throughput improvement on batch workloads.
 - Priority-based job queuing with pause/resume/cancel capabilities
 - Resource usage monitoring and automatic queue management
 
+#### Document Processing Pipeline
+- `DocumentIngestionPipeline` handles multi-format document parsing (PDF, DOCX, TXT, MD)
+- `IntelligentChunker` provides semantic, sentence, and token-based chunking strategies
+- `IncrementalUpdateManager` supports incremental document updates and deduplication
+- Automatic metadata extraction and version tracking
+
 ## Development Context
 
 ### Performance Characteristics
@@ -130,7 +138,7 @@ The system implements a comprehensive vector database solution:
 
 - **Day 6-8 Implementation**: Basic vector operations, semantic search, memory integration
 - **Day 9 Implementation**: Index optimization (3 performance profiles), background reindexing system, comprehensive monitoring with alerting
-- **Day 10 Ready**: Document ingestion pipeline and chunking strategies (upcoming)
+- **Day 10 Implementation**: Complete document ingestion pipeline with intelligent chunking, incremental updates, and deduplication
 
 ### Configuration
 Primary configuration via environment variables:
@@ -147,8 +155,40 @@ Primary configuration via environment variables:
 ### Testing Strategy
 - Unit tests for individual components (`cargo test`)
 - Integration tests for API endpoints (`tests/` directory)
-- Specific test suites for each major feature (index optimization, reindexing, monitoring)
+- Specific test suites for each major feature:
+  - `test_day9_1_index_optimization.rs`: Index optimization testing
+  - `test_day9_2_background_reindexing.rs`: Background reindexing system
+  - `test_day9_3_index_monitoring.rs`: Performance monitoring and alerting
+- Document processing tests: `test_day10_simple.rs`, `upload_test_document.rs`
 - Performance benchmarking via simulation methods
+
+### API Endpoints
+The server provides comprehensive REST APIs organized by functionality:
+
+#### Core AI Services
+- Text generation: `/api/v1/generate`
+- Model management: `/api/v1/models/*` 
+- Health checks: `/health`
+
+#### Vector Database Operations
+- Vector CRUD: `/api/v1/vectors/*`
+- Semantic search: `/api/v1/search/*`
+- Embedding services: `/api/v1/embeddings/*`
+
+#### Index Management  
+- Index optimization: `/api/v1/index/optimize`
+- Background reindexing: `/api/v1/index/reindex`
+- Performance monitoring: `/api/v1/index/monitor/*`
+
+#### Document Processing (Day 10)
+- Document ingestion: `/api/v1/documents/ingest`
+- File upload: `/api/v1/documents/upload`
+- Document retrieval: `/api/v1/documents/{id}`
+- Batch processing: `/api/v1/documents/ingest/batch`
+- Chunk existing document: `/api/v1/documents/{id}/chunk`
+- Chunk arbitrary content: `/api/v1/documents/chunk`
+- Incremental updates: `/api/v1/documents/update`
+- Deduplication: `/api/v1/documents/deduplicate`
 
 ### Kubernetes Deployment
 Ready-to-use Kubernetes manifests in `k8s/` directory for:

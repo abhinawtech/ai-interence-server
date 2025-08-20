@@ -40,3 +40,4 @@ pub mod vectors_enhanced; // Enhanced vector operations - semantic search and fi
 pub mod embedding;       // Text-to-vector embedding API - semantic processing
 pub mod search;          // Dedicated semantic search API - session-aware intelligent search
 pub mod index_management; // Index optimization and performance management - Day 9 implementation
+pub mod document_processing; // Document processing pipeline - Day 10 implementation

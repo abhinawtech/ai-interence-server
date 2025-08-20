@@ -211,6 +211,7 @@ pub type IngestionResult<T> = Result<T, IngestionError>;
 pub struct DocumentIngestionPipeline {
     config: IngestionConfig,
     stats: IngestionStats,
+    document_store: std::collections::HashMap<Uuid, ProcessedDocument>,
 }
 
 impl DocumentIngestionPipeline {
@@ -218,6 +219,7 @@ impl DocumentIngestionPipeline {
         Self {
             config,
             stats: IngestionStats::default(),
+            document_store: std::collections::HashMap::new(),
         }
     }
     
@@ -300,10 +302,33 @@ impl DocumentIngestionPipeline {
         self.stats.total_tokens += total_tokens;
         *self.stats.format_breakdown.entry(raw_doc.format).or_insert(0) += 1;
         
+        // Store the processed document
+        self.document_store.insert(processed.id, processed.clone());
+        
         info!("✅ Document processed: {} sections, {} tokens", 
               processed.sections.len(), total_tokens);
         
         Ok(processed)
+    }
+    
+    /// Retrieve a document by ID
+    pub fn get_document(&self, document_id: &Uuid) -> Option<&ProcessedDocument> {
+        self.document_store.get(document_id)
+    }
+    
+    /// Get the full text content of a document
+    pub fn get_document_content(&self, document_id: &Uuid) -> Option<String> {
+        self.document_store.get(document_id).map(|doc| {
+            doc.sections.iter()
+                .map(|section| section.content.clone())
+                .collect::<Vec<String>>()
+                .join("\n\n")
+        })
+    }
+    
+    /// Get all document IDs
+    pub fn get_document_ids(&self) -> Vec<Uuid> {
+        self.document_store.keys().cloned().collect()
     }
     
     pub fn get_stats(&self) -> &IngestionStats {

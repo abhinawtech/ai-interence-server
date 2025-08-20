@@ -11,7 +11,7 @@
 // ================================================================================================
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, State, Multipart},
     http::StatusCode,
     response::Json,
     routing::{get, post},
@@ -36,17 +36,17 @@ use crate::errors::AppError;
 
 #[derive(Clone)]
 pub struct DocumentProcessingApiState {
-    pub ingestion_pipeline: DocumentIngestionPipeline,
-    pub chunker: IntelligentChunker,
-    pub update_manager: IncrementalUpdateManager,
+    pub ingestion_pipeline: std::sync::Arc<tokio::sync::Mutex<DocumentIngestionPipeline>>,
+    pub chunker: std::sync::Arc<IntelligentChunker>,
+    pub update_manager: std::sync::Arc<tokio::sync::Mutex<IncrementalUpdateManager>>,
 }
 
 impl DocumentProcessingApiState {
     pub fn new() -> Self {
         Self {
-            ingestion_pipeline: create_document_pipeline(),
-            chunker: create_semantic_chunker(500),
-            update_manager: create_incremental_manager(),
+            ingestion_pipeline: std::sync::Arc::new(tokio::sync::Mutex::new(create_document_pipeline())),
+            chunker: std::sync::Arc::new(create_semantic_chunker(500)),
+            update_manager: std::sync::Arc::new(tokio::sync::Mutex::new(create_incremental_manager())),
         }
     }
 }
@@ -73,8 +73,13 @@ pub struct BatchIngestRequest {
 
 // CHUNKING REQUESTS
 #[derive(Debug, Deserialize)]
-pub struct ChunkDocumentRequest {
-    pub document_id: Uuid,
+pub struct ChunkExistingDocumentRequest {
+    pub strategy: Option<ChunkingStrategy>,
+    pub config_overrides: Option<ChunkingConfigOverrides>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChunkContentRequest {
     pub content: String,
     pub strategy: Option<ChunkingStrategy>,
     pub config_overrides: Option<ChunkingConfigOverrides>,
@@ -208,15 +213,18 @@ pub fn create_document_processing_router() -> Router<DocumentProcessingApiState>
     Router::new()
         // Document Ingestion
         .route("/api/v1/documents/ingest", post(ingest_document))
+        .route("/api/v1/documents/upload", post(upload_file_document))
         .route("/api/v1/documents/ingest/batch", post(batch_ingest))
+        .route("/api/v1/documents/{id}", get(get_document))
         
         // Document Chunking
-        .route("/api/v1/documents/chunk", post(chunk_document))
-        .route("/api/v1/documents/:id/chunks", get(get_document_chunks))
+        .route("/api/v1/documents/{id}/chunk", post(chunk_existing_document))
+        .route("/api/v1/documents/chunk", post(chunk_content))
+        .route("/api/v1/documents/{id}/chunks", get(get_document_chunks))
         
         // Document Updates
         .route("/api/v1/documents/update", post(update_document))
-        .route("/api/v1/documents/:id/versions", get(get_document_versions))
+        .route("/api/v1/documents/{id}/versions", get(get_document_versions))
         
         // Deduplication
         .route("/api/v1/documents/deduplicate", post(run_deduplication))
@@ -224,7 +232,7 @@ pub fn create_document_processing_router() -> Router<DocumentProcessingApiState>
         
         // Statistics and Monitoring
         .route("/api/v1/documents/stats", get(get_document_stats))
-        .route("/api/v1/documents/:id/stats", get(get_document_specific_stats))
+        .route("/api/v1/documents/{id}/stats", get(get_document_specific_stats))
 }
 
 // ================================================================================================
@@ -232,8 +240,9 @@ pub fn create_document_processing_router() -> Router<DocumentProcessingApiState>
 // ================================================================================================
 
 /// Ingest a single document
-async fn ingest_document(
-    State(mut state): State<DocumentProcessingApiState>,
+#[axum::debug_handler]
+pub async fn ingest_document(
+    State(state): State<DocumentProcessingApiState>,
     Json(request): Json<IngestDocumentRequest>,
 ) -> Result<Json<IngestDocumentResponse>, AppError> {
     info!("📄 Ingesting single document");
@@ -251,8 +260,11 @@ async fn ingest_document(
     }
     
     // Process document
-    let processed = state.ingestion_pipeline.process_document(raw_doc.clone()).await
-        .map_err(|e| AppError::Processing(format!("Document ingestion failed: {}", e)))?;
+    let processed = {
+        let mut pipeline = state.ingestion_pipeline.lock().await;
+        pipeline.process_document(raw_doc.clone()).await
+            .map_err(|e| AppError::Processing(format!("Document ingestion failed: {}", e)))?
+    };
     
     let response = IngestDocumentResponse {
         document_id: processed.id,
@@ -269,15 +281,111 @@ async fn ingest_document(
     Ok(Json(response))
 }
 
+/// Upload and ingest a document from multipart file
+#[axum::debug_handler]
+pub async fn upload_file_document(
+    State(state): State<DocumentProcessingApiState>,
+    mut multipart: Multipart,
+) -> Result<Json<IngestDocumentResponse>, AppError> {
+    info!("📁 Processing multipart file upload");
+
+    let mut file_content: Option<String> = None;
+    let mut file_name: Option<String> = None;
+    let mut metadata: HashMap<String, String> = HashMap::new();
+
+    // Process multipart fields
+    while let Some(field) = multipart.next_field().await
+        .map_err(|e| AppError::Processing(format!("Multipart parsing failed: {}", e)))? {
+        
+        let field_name = field.name().unwrap_or("unknown").to_string();
+        
+        match field_name.as_str() {
+            "file" => {
+                // Extract filename from field
+                if let Some(filename) = field.file_name() {
+                    file_name = Some(filename.to_string());
+                }
+                
+                // Read file content
+                let data = field.bytes().await
+                    .map_err(|e| AppError::Processing(format!("Failed to read file data: {}", e)))?;
+                
+                file_content = Some(String::from_utf8_lossy(&data).to_string());
+                info!("📄 File uploaded: {} ({} bytes)", file_name.as_ref().unwrap_or(&"unknown".to_string()), data.len());
+            },
+            "author" => {
+                let value = field.text().await
+                    .map_err(|e| AppError::Processing(format!("Failed to read author field: {}", e)))?;
+                metadata.insert("author".to_string(), value);
+            },
+            "category" => {
+                let value = field.text().await
+                    .map_err(|e| AppError::Processing(format!("Failed to read category field: {}", e)))?;
+                metadata.insert("category".to_string(), value);
+            },
+            "tags" => {
+                let value = field.text().await
+                    .map_err(|e| AppError::Processing(format!("Failed to read tags field: {}", e)))?;
+                metadata.insert("tags".to_string(), value);
+            },
+            _ => {
+                // Handle other metadata fields
+                let value = field.text().await
+                    .map_err(|e| AppError::Processing(format!("Failed to read field {}: {}", field_name, e)))?;
+                metadata.insert(field_name, value);
+            }
+        }
+    }
+
+    // Validate required fields
+    let content = file_content.ok_or_else(|| {
+        AppError::Validation("No file provided in multipart request".to_string())
+    })?;
+
+    let filename = file_name.unwrap_or_else(|| "uploaded_file".to_string());
+
+    // Detect format from file extension
+    let format = detect_format_from_filename(&filename);
+    
+    // Create raw document
+    let mut raw_doc = RawDocument::new(content, format.clone());
+    raw_doc.source_path = Some(filename.clone());
+    raw_doc.metadata = metadata;
+
+    // Process document
+    let processed = {
+        let mut pipeline = state.ingestion_pipeline.lock().await;
+        pipeline.process_document(raw_doc.clone()).await
+            .map_err(|e| AppError::Processing(format!("Document ingestion failed: {}", e)))?
+    };
+
+    let response = IngestDocumentResponse {
+        document_id: processed.id,
+        original_id: processed.original_id,
+        sections_count: processed.sections.len(),
+        total_tokens: processed.total_tokens,
+        processing_time_ms: 0,
+        format,
+    };
+
+    info!("✅ File document ingested: {} - {} sections, {} tokens", 
+          filename, response.sections_count, response.total_tokens);
+
+    Ok(Json(response))
+}
+
 /// Batch ingest multiple documents
 async fn batch_ingest(
-    State(mut state): State<DocumentProcessingApiState>,
+    State(state): State<DocumentProcessingApiState>,
     Json(request): Json<BatchIngestRequest>,
 ) -> Result<Json<BatchIngestResponse>, AppError> {
     info!("📚 Starting batch ingestion of {} files", request.file_paths.len());
     
     let start_time = std::time::Instant::now();
-    let results = state.ingestion_pipeline.ingest_batch(request.file_paths.clone()).await;
+    let results = {
+        let mut pipeline = state.ingestion_pipeline.lock().await;
+        pipeline.ingest_batch(request.file_paths.clone()).await
+    };
     
     let mut ingest_results = Vec::new();
     let mut successful = 0;
@@ -318,18 +426,41 @@ async fn batch_ingest(
     Ok(Json(response))
 }
 
+/// Get document by ID
+async fn get_document(
+    State(state): State<DocumentProcessingApiState>,
+    Path(document_id): Path<Uuid>,
+) -> Result<Json<ProcessedDocument>, AppError> {
+    info!("📋 Retrieving document: {}", document_id);
+    
+    let pipeline = state.ingestion_pipeline.lock().await;
+    let document = pipeline.get_document(&document_id)
+        .ok_or_else(|| AppError::Processing(format!("Document not found: {}", document_id)))?;
+    
+    info!("✅ Document retrieved: {} sections", document.sections.len());
+    Ok(Json(document.clone()))
+}
+
 // ================================================================================================
 // DOCUMENT CHUNKING ENDPOINTS
 // ================================================================================================
 
-/// Chunk a document using intelligent strategies
-async fn chunk_document(
+/// Chunk existing document by ID - retrieves content from storage
+async fn chunk_existing_document(
     State(state): State<DocumentProcessingApiState>,
-    Json(request): Json<ChunkDocumentRequest>,
+    Path(document_id): Path<Uuid>,
+    Json(request): Json<ChunkExistingDocumentRequest>,
 ) -> Result<Json<ChunkDocumentResponse>, AppError> {
-    info!("🔪 Chunking document: {}", request.document_id);
+    info!("🔪 Chunking existing document: {}", document_id);
     
-    let chunking_result = state.chunker.chunk_document(request.document_id, &request.content)
+    // Retrieve document content from storage
+    let content = {
+        let pipeline = state.ingestion_pipeline.lock().await;
+        pipeline.get_document_content(&document_id)
+            .ok_or_else(|| AppError::Processing(format!("Document not found: {}", document_id)))?
+    };
+    
+    let chunking_result = state.chunker.chunk_document(document_id, &content)
         .map_err(|e| AppError::Processing(format!("Document chunking failed: {}", e)))?;
     
     let chunks: Vec<ChunkInfo> = chunking_result.chunks.iter().map(|chunk| {
@@ -344,7 +475,7 @@ async fn chunk_document(
     }).collect();
     
     let response = ChunkDocumentResponse {
-        document_id: request.document_id,
+        document_id,
         total_chunks: chunking_result.total_chunks,
         total_tokens: chunking_result.total_tokens,
         average_chunk_size: chunking_result.average_chunk_size,
@@ -359,6 +490,47 @@ async fn chunk_document(
     };
     
     info!("✅ Document chunked: {} chunks generated", response.total_chunks);
+    Ok(Json(response))
+}
+
+/// Chunk arbitrary content - doesn't require existing document
+async fn chunk_content(
+    State(state): State<DocumentProcessingApiState>,
+    Json(request): Json<ChunkContentRequest>,
+) -> Result<Json<ChunkDocumentResponse>, AppError> {
+    let temp_id = Uuid::new_v4();
+    info!("🔪 Chunking content (temporary ID: {})", temp_id);
+    
+    let chunking_result = state.chunker.chunk_document(temp_id, &request.content)
+        .map_err(|e| AppError::Processing(format!("Content chunking failed: {}", e)))?;
+    
+    let chunks: Vec<ChunkInfo> = chunking_result.chunks.iter().map(|chunk| {
+        ChunkInfo {
+            id: chunk.id,
+            content: chunk.content.clone(),
+            token_count: chunk.token_count,
+            chunk_index: chunk.chunk_index,
+            chunk_type: format!("{:?}", chunk.chunk_type),
+            has_overlap: chunk.overlap_info.is_some(),
+        }
+    }).collect();
+    
+    let response = ChunkDocumentResponse {
+        document_id: temp_id,
+        total_chunks: chunking_result.total_chunks,
+        total_tokens: chunking_result.total_tokens,
+        average_chunk_size: chunking_result.average_chunk_size,
+        processing_time_ms: chunking_result.processing_time_ms,
+        quality_metrics: ChunkQualityInfo {
+            boundary_preservation_score: chunking_result.quality_metrics.boundary_preservation_score,
+            size_consistency_score: chunking_result.quality_metrics.size_consistency_score,
+            overlap_coverage_score: chunking_result.quality_metrics.overlap_coverage_score,
+            context_preservation_score: chunking_result.quality_metrics.context_preservation_score,
+        },
+        chunks,
+    };
+    
+    info!("✅ Content chunked: {} chunks generated", response.total_chunks);
     Ok(Json(response))
 }
 
@@ -391,16 +563,19 @@ async fn get_document_chunks(
 
 /// Update a document with incremental changes
 async fn update_document(
-    State(mut state): State<DocumentProcessingApiState>,
+    State(state): State<DocumentProcessingApiState>,
     Json(request): Json<UpdateDocumentRequest>,
 ) -> Result<Json<UpdateDocumentResponse>, AppError> {
     info!("🔄 Updating document: {}", request.document_id);
     
-    let update_result = state.update_manager.update_document(
-        request.document_id,
-        &request.new_content,
-        request.chunk_ids,
-    ).await.map_err(|e| AppError::Processing(format!("Document update failed: {}", e)))?;
+    let update_result = {
+        let mut manager = state.update_manager.lock().await;
+        manager.update_document(
+            request.document_id,
+            &request.new_content,
+            request.chunk_ids,
+        ).await.map_err(|e| AppError::Processing(format!("Document update failed: {}", e)))?
+    };
     
     let response = UpdateDocumentResponse {
         document_id: update_result.document_id,
@@ -433,7 +608,10 @@ async fn get_document_versions(
 ) -> Result<Json<Vec<HashMap<String, serde_json::Value>>>, AppError> {
     info!("📚 Retrieving version history for: {}", document_id);
     
-    let versions = state.update_manager.get_version_history(document_id);
+    let versions = {
+        let manager = state.update_manager.lock().await;
+        manager.get_version_history(document_id).cloned()
+    };
     
     match versions {
         Some(version_list) => {
@@ -462,16 +640,21 @@ async fn get_document_versions(
 
 /// Run deduplication analysis
 async fn run_deduplication(
-    State(mut state): State<DocumentProcessingApiState>,
-    Json(request): Json<DeduplicationRequest>,
+    State(state): State<DocumentProcessingApiState>,
+    Json(_request): Json<DeduplicationRequest>,
 ) -> Result<Json<DeduplicationResponse>, AppError> {
     info!("🔍 Running deduplication analysis");
     
-    let candidates = state.update_manager.find_duplicates_global().await
-        .map_err(|e| AppError::Processing(format!("Deduplication failed: {}", e)))?;
-    
-    let processed_chunks = state.update_manager.apply_deduplication(candidates.clone()).await
-        .map_err(|e| AppError::Processing(format!("Deduplication application failed: {}", e)))?;
+    let (candidates, processed_chunks) = {
+        let mut manager = state.update_manager.lock().await;
+        let candidates = manager.find_duplicates_global().await
+            .map_err(|e| AppError::Processing(format!("Deduplication failed: {}", e)))?;
+        
+        let processed_chunks = manager.apply_deduplication(candidates.clone()).await
+            .map_err(|e| AppError::Processing(format!("Deduplication application failed: {}", e)))?;
+        
+        (candidates, processed_chunks)
+    };
     
     let total_savings: usize = candidates.iter()
         .map(|c| c.potential_savings.bytes_saved)
@@ -496,13 +679,17 @@ async fn run_deduplication(
 }
 
 /// Find duplicate candidates
-async fn find_duplicates(
-    State(mut state): State<DocumentProcessingApiState>,
+#[axum::debug_handler]  
+pub async fn find_duplicates(
+    State(state): State<DocumentProcessingApiState>,
 ) -> Result<Json<Vec<HashMap<String, serde_json::Value>>>, AppError> {
     info!("🔍 Finding duplicate candidates");
     
-    let candidates = state.update_manager.find_duplicates_global().await
-        .map_err(|e| AppError::Processing(format!("Duplicate detection failed: {}", e)))?;
+    let candidates = {
+        let mut manager = state.update_manager.lock().await;
+        manager.find_duplicates_global().await
+            .map_err(|e| AppError::Processing(format!("Duplicate detection failed: {}", e)))?
+    };
     
     let candidate_info: Vec<_> = candidates.iter().map(|c| {
         let mut info = HashMap::new();
@@ -528,8 +715,11 @@ async fn get_document_stats(
 ) -> Result<Json<DocumentStatsResponse>, AppError> {
     info!("📊 Retrieving document processing statistics");
     
-    let ingestion_stats = state.ingestion_pipeline.get_stats();
-    let update_stats = state.update_manager.get_stats();
+    let (ingestion_stats, update_stats) = {
+        let pipeline = state.ingestion_pipeline.lock().await;
+        let manager = state.update_manager.lock().await;
+        (pipeline.get_stats().clone(), manager.get_stats())
+    };
     
     let response = DocumentStatsResponse {
         total_documents: update_stats.total_documents,
@@ -562,4 +752,20 @@ async fn get_document_specific_stats(
     stats.insert("last_updated".to_string(), serde_json::json!("2024-01-01T00:00:00Z"));
     
     Ok(Json(stats))
+}
+
+// ================================================================================================
+// HELPER FUNCTIONS
+// ================================================================================================
+
+/// Detect document format from filename extension
+fn detect_format_from_filename(filename: &str) -> DocumentFormat {
+    let extension = filename.split('.').last().unwrap_or("").to_lowercase();
+    match extension.as_str() {
+        "md" | "markdown" => DocumentFormat::Markdown,
+        "json" => DocumentFormat::Json,
+        "csv" => DocumentFormat::Csv,
+        "txt" | "text" => DocumentFormat::PlainText,
+        _ => DocumentFormat::PlainText, // Default to plain text for unknown extensions
+    }
 }

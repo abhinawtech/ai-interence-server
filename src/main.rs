@@ -27,6 +27,7 @@ use ai_interence_server::api::vectors::create_vector_router;
 use ai_interence_server::api::vectors_enhanced::create_enhanced_vector_router;
 use ai_interence_server::api::embedding::{create_embedding_router, create_embedding_service_with_model};
 use ai_interence_server::api::search::{create_search_router, SearchSessionManager};
+use ai_interence_server::api::document_processing::{create_document_processing_router, DocumentProcessingApiState};
 use ai_interence_server::batching::{BatchConfig, BatchProcessor};
 use ai_interence_server::vector::{VectorStorageFactory, EmbeddingConfig};
 use ai_interence_server::models::{ModelVersionManager, AtomicModelSwap, version_manager::ModelStatus, initialize_models};
@@ -259,6 +260,12 @@ async fn main() -> anyhow::Result<()> {
     let search_router = create_search_router().with_state(search_api_state);
     tracing::info!("✅ Semantic search API initialized with contextual search capabilities");
 
+    // DOCUMENT PROCESSING API: Day 10 - Intelligent Document Pipeline
+    tracing::info!("📄 Initializing document processing pipeline with intelligent chunking...");
+    let document_processing_state = DocumentProcessingApiState::new();
+    let document_router = create_document_processing_router().with_state(document_processing_state);
+    tracing::info!("✅ Document processing API initialized with ingestion, chunking, and deduplication");
+
     // ARCHITECTURE: Modular Router Design with State Separation
     // Implements clean separation of concerns via dedicated router modules:
     // - Generation router handles inference requests with BatchProcessor state
@@ -310,7 +317,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(vector_router)
         .merge(enhanced_vector_router)
         .merge(embedding_router)
-        .merge(search_router);
+        .merge(search_router)
+        .merge(document_router);
 
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "3000".to_string())
@@ -352,6 +360,16 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("    • POST /api/v1/search/suggest - Auto-complete suggestions");
     tracing::info!("    • POST /api/v1/search/trending - Trending search topics");
     tracing::info!("    • GET  /api/v1/search/analytics/{{session_id}} - Search session analytics");
+    tracing::info!("  🔷 DOCUMENT PROCESSING (Day 10):");
+    tracing::info!("    • POST /api/v1/documents/ingest - Ingest single document");
+    tracing::info!("    • POST /api/v1/documents/ingest/batch - Batch document ingestion");
+    tracing::info!("    • POST /api/v1/documents/chunk - Intelligent document chunking");
+    tracing::info!("    • GET  /api/v1/documents/{{id}}/chunks - Get document chunks");
+    tracing::info!("    • POST /api/v1/documents/update - Incremental document updates");
+    tracing::info!("    • GET  /api/v1/documents/{{id}}/versions - Document version history");
+    tracing::info!("    • POST /api/v1/documents/deduplicate - Run global deduplication");
+    tracing::info!("    • GET  /api/v1/documents/duplicates - Find duplicate candidates");
+    tracing::info!("    • GET  /api/v1/documents/stats - Document processing statistics");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let server = axum::serve(listener, app);
