@@ -11,7 +11,9 @@ use std::sync::Arc;
 use crate::{
     AppError,
     vector::{IndexOptimizer, IndexProfile, IndexPerformanceMetrics, CollectionIndexConfig, 
-             ReindexManager, ReindexJobStatus, ReindexJobState, JobPriority},
+             ReindexManager, ReindexJobStatus, ReindexJobState, JobPriority,
+             IndexMonitor, PerformanceWindow, AlertSeverity, AlertRule, AlertComparison, 
+             ActiveAlert, HealthStatus, CollectionHealth, MetricDataPoint},
 };
 use uuid::Uuid;
 
@@ -70,10 +72,44 @@ pub struct QueueStatusResponse {
     pub max_concurrent: usize,
 }
 
+/// Request to create an alert rule
+#[derive(Debug, Deserialize)]
+pub struct CreateAlertRuleRequest {
+    pub rule_name: String,
+    pub metric_name: String,
+    pub threshold: f64,
+    pub comparison: AlertComparison,
+    pub severity: AlertSeverity,
+    pub duration_minutes: u64,
+    pub collection_pattern: Option<String>,
+}
+
+/// Request to record metrics
+#[derive(Debug, Deserialize)]
+pub struct RecordMetricRequest {
+    pub metric_name: String,
+    pub value: f64,
+    pub tags: Option<HashMap<String, String>>,
+}
+
+/// Query parameters for metric history
+#[derive(Debug, Deserialize)]
+pub struct MetricHistoryQuery {
+    pub hours: Option<u64>,
+    pub metric: Option<String>,
+}
+
+/// Query parameters for performance window
+#[derive(Debug, Deserialize)]
+pub struct PerformanceWindowQuery {
+    pub window_minutes: Option<u64>,
+}
+
 /// Application state for index management
 pub struct IndexManagementState {
     pub index_optimizer: Arc<IndexOptimizer>,
     pub reindex_manager: Arc<ReindexManager>,
+    pub index_monitor: Arc<IndexMonitor>,
 }
 
 /// Register collection for optimization
@@ -346,14 +382,152 @@ pub async fn cancel_job(
     }))
 }
 
+/// Record a metric for a collection
+pub async fn record_metric(
+    State(state): State<Arc<IndexManagementState>>,
+    Path(collection_name): Path<String>,
+    Json(request): Json<RecordMetricRequest>,
+) -> Result<Json<OptimizationResponse>, AppError> {
+    state.index_monitor.record_metric(
+        &collection_name,
+        &request.metric_name,
+        request.value,
+        request.tags,
+    ).await;
+    
+    Ok(Json(OptimizationResponse {
+        success: true,
+        message: format!("Recorded metric '{}' for collection '{}'", request.metric_name, collection_name),
+        performance_metrics: None,
+        recommendations: None,
+    }))
+}
+
+/// Get performance window for a collection
+pub async fn get_performance_window(
+    State(state): State<Arc<IndexManagementState>>,
+    Path(collection_name): Path<String>,
+    Query(params): Query<PerformanceWindowQuery>,
+) -> Result<Json<Option<PerformanceWindow>>, AppError> {
+    let window_minutes = params.window_minutes.unwrap_or(15);
+    let window = state.index_monitor.get_performance_window(&collection_name, window_minutes).await;
+    Ok(Json(window))
+}
+
+/// Get collection health status
+pub async fn get_collection_health(
+    State(state): State<Arc<IndexManagementState>>,
+    Path(collection_name): Path<String>,
+) -> Result<Json<Option<CollectionHealth>>, AppError> {
+    let health = state.index_monitor.get_collection_health(&collection_name).await;
+    Ok(Json(health))
+}
+
+/// Get all collection health statuses
+pub async fn get_all_health_statuses(
+    State(state): State<Arc<IndexManagementState>>,
+) -> Result<Json<HashMap<String, CollectionHealth>>, AppError> {
+    let health_statuses = state.index_monitor.get_all_health_statuses().await;
+    Ok(Json(health_statuses))
+}
+
+/// Create an alert rule
+pub async fn create_alert_rule(
+    State(state): State<Arc<IndexManagementState>>,
+    Json(request): Json<CreateAlertRuleRequest>,
+) -> Result<Json<OptimizationResponse>, AppError> {
+    let rule_id = Uuid::new_v4();
+    let rule = AlertRule {
+        rule_id,
+        rule_name: request.rule_name.clone(),
+        metric_name: request.metric_name,
+        threshold: request.threshold,
+        comparison: request.comparison,
+        severity: request.severity,
+        duration_minutes: request.duration_minutes,
+        enabled: true,
+        collection_pattern: request.collection_pattern,
+    };
+    
+    state.index_monitor.create_alert_rule(rule).await?;
+    
+    Ok(Json(OptimizationResponse {
+        success: true,
+        message: format!("Created alert rule '{}' with ID: {}", request.rule_name, rule_id),
+        performance_metrics: None,
+        recommendations: None,
+    }))
+}
+
+/// Get active alerts
+pub async fn get_active_alerts(
+    State(state): State<Arc<IndexManagementState>>,
+) -> Result<Json<Vec<ActiveAlert>>, AppError> {
+    let alerts = state.index_monitor.get_active_alerts().await;
+    Ok(Json(alerts))
+}
+
+/// Get metric history
+pub async fn get_metric_history(
+    State(state): State<Arc<IndexManagementState>>,
+    Path(collection_name): Path<String>,
+    Query(params): Query<MetricHistoryQuery>,
+) -> Result<Json<Vec<MetricDataPoint>>, AppError> {
+    let hours = params.hours.unwrap_or(24);
+    let metric = params.metric.as_deref().unwrap_or("query_latency_ms");
+    
+    let history = state.index_monitor.get_metric_history(&collection_name, metric, hours).await;
+    Ok(Json(history))
+}
+
+/// Simulate metrics collection for testing
+pub async fn simulate_metrics(
+    State(state): State<Arc<IndexManagementState>>,
+    Path(collection_name): Path<String>,
+) -> Result<Json<OptimizationResponse>, AppError> {
+    state.index_monitor.simulate_metrics_collection(&collection_name).await;
+    
+    Ok(Json(OptimizationResponse {
+        success: true,
+        message: format!("Simulated metrics collection for collection '{}'", collection_name),
+        performance_metrics: None,
+        recommendations: None,
+    }))
+}
+
+/// Resolve an alert
+pub async fn resolve_alert(
+    State(state): State<Arc<IndexManagementState>>,
+    Path(alert_id): Path<Uuid>,
+) -> Result<Json<OptimizationResponse>, AppError> {
+    state.index_monitor.resolve_alert(alert_id).await?;
+    
+    Ok(Json(OptimizationResponse {
+        success: true,
+        message: format!("Resolved alert: {}", alert_id),
+        performance_metrics: None,
+        recommendations: None,
+    }))
+}
+
+/// Get all alert rules
+pub async fn get_alert_rules(
+    State(state): State<Arc<IndexManagementState>>,
+) -> Result<Json<HashMap<Uuid, AlertRule>>, AppError> {
+    let rules = state.index_monitor.get_alert_rules().await;
+    Ok(Json(rules))
+}
+
 /// Create index management router
 pub fn create_index_management_router(
     index_optimizer: Arc<IndexOptimizer>, 
-    reindex_manager: Arc<ReindexManager>
+    reindex_manager: Arc<ReindexManager>,
+    index_monitor: Arc<IndexMonitor>
 ) -> Router {
     let state = Arc::new(IndexManagementState { 
         index_optimizer,
         reindex_manager,
+        index_monitor,
     });
 
     Router::new()
@@ -374,6 +548,18 @@ pub fn create_index_management_router(
         .route("/reindex/jobs/:job_id/cancel", post(cancel_job))
         .route("/reindex/jobs/status/:status", get(get_jobs_by_status))
         .route("/reindex/queue/status", get(get_queue_status))
+        
+        // Monitoring and metrics endpoints
+        .route("/monitor/collections/:collection_name/metrics", post(record_metric))
+        .route("/monitor/collections/:collection_name/performance", get(get_performance_window))
+        .route("/monitor/collections/:collection_name/health", get(get_collection_health))
+        .route("/monitor/collections/:collection_name/metrics/history", get(get_metric_history))
+        .route("/monitor/collections/:collection_name/simulate", post(simulate_metrics))
+        .route("/monitor/health", get(get_all_health_statuses))
+        .route("/monitor/alerts", get(get_active_alerts))
+        .route("/monitor/alerts", post(create_alert_rule))
+        .route("/monitor/alerts/:alert_id/resolve", post(resolve_alert))
+        .route("/monitor/alert-rules", get(get_alert_rules))
         
         .with_state(state)
 }
