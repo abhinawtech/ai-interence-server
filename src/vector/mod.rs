@@ -15,6 +15,7 @@ pub mod qdrant_client;
 pub mod qdrant_operations;
 pub mod storage_factory;
 pub mod index_optimizer;
+pub mod reindex_manager;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,6 +30,7 @@ pub use qdrant_client::{QdrantClient, QdrantClientBuilder};
 pub use qdrant_operations::{QdrantVectorStorage, QdrantStorageStats};
 pub use storage_factory::{VectorBackend, VectorStorageFactory, VectorStorageConfig};
 pub use index_optimizer::{IndexOptimizer, IndexProfile, IndexPerformanceMetrics, CollectionIndexConfig, create_index_optimizer};
+pub use reindex_manager::{ReindexManager, ReindexJobStatus, ReindexJobState, ReindexJobConfig, JobPriority, ResourceUsage, create_reindex_manager};
 
 // ================================================================================================
 // BASIC TYPES
