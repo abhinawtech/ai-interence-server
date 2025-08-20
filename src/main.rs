@@ -26,6 +26,7 @@ use ai_interence_server::api::models::*;
 use ai_interence_server::api::vectors::create_vector_router;
 use ai_interence_server::api::vectors_enhanced::create_enhanced_vector_router;
 use ai_interence_server::api::embedding::{create_embedding_router, create_embedding_service_with_model};
+use ai_interence_server::api::search::{create_search_router, SearchSessionManager};
 use ai_interence_server::batching::{BatchConfig, BatchProcessor};
 use ai_interence_server::vector::{VectorStorageFactory, EmbeddingConfig};
 use ai_interence_server::models::{ModelVersionManager, AtomicModelSwap, version_manager::ModelStatus, initialize_models};
@@ -247,9 +248,16 @@ async fn main() -> anyhow::Result<()> {
 
     // ENHANCED VECTOR API: Semantic Search and Advanced Filtering
     tracing::info!("🔍 Setting up enhanced vector API with semantic search...");
-    let enhanced_vector_state = (Arc::clone(&vector_backend), embedding_service_state);
+    let enhanced_vector_state = (Arc::clone(&vector_backend), embedding_service_state.clone());
     let enhanced_vector_router = create_enhanced_vector_router().with_state(enhanced_vector_state);
     tracing::info!("✅ Enhanced vector API initialized with semantic search capabilities");
+
+    // SEMANTIC SEARCH API: Session-Aware Intelligent Search Engine
+    tracing::info!("🧠 Initializing semantic search engine with session management...");
+    let search_session_manager = Arc::new(SearchSessionManager::new());
+    let search_api_state = (Arc::clone(&vector_backend), embedding_service_state, search_session_manager);
+    let search_router = create_search_router().with_state(search_api_state);
+    tracing::info!("✅ Semantic search API initialized with contextual search capabilities");
 
     // ARCHITECTURE: Modular Router Design with State Separation
     // Implements clean separation of concerns via dedicated router modules:
@@ -295,7 +303,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(models_router)
         .merge(vector_router)
         .merge(enhanced_vector_router)
-        .merge(embedding_router);
+        .merge(embedding_router)
+        .merge(search_router);
 
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "3000".to_string())
@@ -331,6 +340,12 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("    • POST /api/v1/embed/batch - Batch text embedding");
     tracing::info!("    • POST /api/v1/embed/similarity - Text similarity");
     tracing::info!("    • GET  /api/v1/embed/stats - Embedding statistics");
+    tracing::info!("  🔷 SEMANTIC SEARCH ENGINE:");
+    tracing::info!("    • POST /api/v1/search/semantic - Session-aware semantic search");
+    tracing::info!("    • POST /api/v1/search/contextual - Contextual search with session history");
+    tracing::info!("    • POST /api/v1/search/suggest - Auto-complete suggestions");
+    tracing::info!("    • POST /api/v1/search/trending - Trending search topics");
+    tracing::info!("    • GET  /api/v1/search/analytics/{{session_id}} - Search session analytics");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let server = axum::serve(listener, app);

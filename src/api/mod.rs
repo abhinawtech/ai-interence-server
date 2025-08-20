@@ -38,3 +38,4 @@ pub mod models;          // Model management - lifecycle, swapping, and administ
 pub mod vectors;         // Vector database operations - simple implementation
 pub mod vectors_enhanced; // Enhanced vector operations - semantic search and filtering
 pub mod embedding;       // Text-to-vector embedding API - semantic processing
+pub mod search;          // Dedicated semantic search API - session-aware intelligent search
