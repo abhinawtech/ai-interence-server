@@ -16,10 +16,9 @@ use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
-use tracing::{info, warn, debug};
+use tracing::info;
 use std::hash::{Hash, Hasher};
 
-use crate::vector::{VectorPoint, VectorResult};
 
 // ================================================================================================
 // CORE TYPES
@@ -329,7 +328,7 @@ impl IncrementalUpdateManager {
         info!("🔍 Starting global deduplication scan");
         
         let mut candidates = Vec::new();
-        let mut processed_pairs: HashSet<(Uuid, Uuid)> = HashSet::new();
+        let _processed_pairs: HashSet<(Uuid, Uuid)> = HashSet::new();
         
         // Compare content hashes to find exact duplicates
         for (content_hash, chunk_ids) in &self.content_index {
@@ -368,14 +367,14 @@ impl IncrementalUpdateManager {
         
         for candidate in candidates {
             match candidate.dedup_strategy {
-                DeduplicationStrategy::Reference { original_id } => {
+                DeduplicationStrategy::Reference { original_id: _ } => {
                     // Remove duplicate chunks and create references
                     for duplicate_id in &candidate.duplicate_chunk_ids {
                         // TODO: Update vector storage to reference original instead of storing duplicate
                         processed_chunks.push(*duplicate_id);
                     }
                 },
-                DeduplicationStrategy::Merge { keep_all_metadata } => {
+                DeduplicationStrategy::Merge { keep_all_metadata: _ } => {
                     // Merge similar chunks
                     processed_chunks.push(candidate.primary_chunk_id);
                     processed_chunks.extend(&candidate.duplicate_chunk_ids);
@@ -474,11 +473,11 @@ impl IncrementalUpdateManager {
         &mut self,
         chunk_ids: &[Uuid],
     ) -> IncrementalResult<Vec<DeduplicationCandidate>> {
-        let mut candidates = Vec::new();
+        let candidates = Vec::new();
         
         // For now, just check exact content hash matches
         // In a real implementation, this would compare vector embeddings
-        for chunk_id in chunk_ids {
+        for _chunk_id in chunk_ids {
             // Placeholder: find similar chunks
             // This would involve vector similarity search in a real implementation
         }

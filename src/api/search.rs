@@ -15,7 +15,7 @@
 
 use crate::vector::{VectorBackend, EmbeddingService};
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::Json,
     routing::{get, post},
@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, debug};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 // ================================================================================================
@@ -351,7 +351,7 @@ pub async fn semantic_search(
     let session = session_manager.get_or_create_session(request.session_id.clone()).await;
     
     // Process query with context
-    let processed_query = if let Some(ref session_id) = request.session_id {
+    let processed_query = if let Some(ref _session_id) = request.session_id {
         enhance_query_with_context(&request.query, &session).await
     } else {
         request.query.clone()

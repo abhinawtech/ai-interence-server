@@ -49,9 +49,6 @@ prost = "0.14.1"
                           # Rayon's work-stealing can interfere with Tokio's async executor
                           # Tokio handles parallelism for I/O, Candle handles compute parallelism
 
-[[bin]]
-name = "upload_test_document"
-path = "upload_test_document.rs"
 
 [features]
 default = []

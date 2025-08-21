@@ -15,7 +15,7 @@
 
 use crate::vector::{VectorPoint, VectorBackend, EmbeddingService};
 use axum::{
-    extract::{Path, Query, State},
+    extract::State,
     http::StatusCode,
     response::Json,
     routing::{get, post},
@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, debug};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 // ================================================================================================
@@ -410,7 +410,7 @@ pub async fn advanced_search(
 
 /// Analyze query and provide suggestions
 pub async fn analyze_query(
-    State((_vector_backend, embedding_service)): State<EnhancedVectorApiState>,
+    State((_vector_backend, _embedding_service)): State<EnhancedVectorApiState>,
     Json(query): Json<serde_json::Value>,
 ) -> Result<Json<QueryAnalysis>, StatusCode> {
     let query_text = query.get("query")
@@ -551,7 +551,7 @@ fn detect_intent(query: &str) -> Option<String> {
     }
 }
 
-fn generate_expanded_queries(original: &str, concepts: &[String]) -> Vec<String> {
+fn generate_expanded_queries(_original: &str, concepts: &[String]) -> Vec<String> {
     let mut expanded = Vec::new();
     
     // Add concept combinations

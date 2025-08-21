@@ -263,7 +263,7 @@ async fn test_job_filtering_by_status() {
         JobPriority::Medium,
     ).await.unwrap();
     
-    let job2_id = manager.schedule_reindex_job(
+    let _job2_id = manager.schedule_reindex_job(
         "filter_test_2".to_string(),
         IndexProfile::Balanced,
         JobPriority::Medium,

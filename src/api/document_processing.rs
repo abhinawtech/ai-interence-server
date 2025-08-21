@@ -12,7 +12,6 @@
 
 use axum::{
     extract::{Path, State, Multipart},
-    http::StatusCode,
     response::Json,
     routing::{get, post},
     Router,
@@ -20,12 +19,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
-use tracing::{info, warn, error};
+use tracing::info;
 
 use crate::vector::{
     DocumentIngestionPipeline, IntelligentChunker, IncrementalUpdateManager,
-    RawDocument, ProcessedDocument, TextChunk, ChunkingResult, UpdateResult,
-    DocumentFormat, ChunkingStrategy, ChunkingConfig, IncrementalUpdateConfig,
+    RawDocument, ProcessedDocument,
+    DocumentFormat, ChunkingStrategy,
     create_document_pipeline, create_semantic_chunker, create_incremental_manager,
 };
 use crate::errors::AppError;
@@ -449,7 +448,7 @@ async fn get_document(
 async fn chunk_existing_document(
     State(state): State<DocumentProcessingApiState>,
     Path(document_id): Path<Uuid>,
-    Json(request): Json<ChunkExistingDocumentRequest>,
+    Json(_request): Json<ChunkExistingDocumentRequest>,
 ) -> Result<Json<ChunkDocumentResponse>, AppError> {
     info!("🔪 Chunking existing document: {}", document_id);
     
