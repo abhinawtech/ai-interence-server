@@ -1,0 +1,16 @@
+Machine Learning Best Practices
+
+1. Data Preprocessing
+Always clean and normalize your data before training. Remove outliers and handle missing values properly.
+
+2. Model Selection
+Choose the right algorithm for your problem. For classification, consider Random Forest or SVM. For regression, try Linear Regression or XGBoost.
+
+3. Feature Engineering
+Create meaningful features from raw data. This often makes the biggest difference in model performance.
+
+4. Cross Validation
+Use k-fold cross validation to get reliable estimates of model performance. Never test on your training data.
+
+5. Hyperparameter Tuning
+Use grid search or random search to find optimal hyperparameters. This can significantly improve results.

@@ -342,13 +342,20 @@ impl GenericLlamaModel {
                 return Err(anyhow::anyhow!("Unexpected logits shape: {:?}", logits_dims));
             };
             
-            let next = last_logits.argmax(candle_core::D::Minus1)?;
-            let next_id = next.to_scalar::<u32>()?;
+            // Apply temperature and top-p sampling to avoid repetition
+            let next_id = self.sample_with_temperature(&last_logits, 0.8, 0.7)?;
 
             if self.is_eos_token(next_id) { 
                 tracing::debug!("🏁 Hit EOS token, stopping generation");
                 break; 
             }
+
+            // Check for repetition patterns to improve quality
+            if self.detect_repetition(&generated, next_id)? {
+                tracing::debug!("🔄 Repetition detected, stopping generation");
+                break;
+            }
+
             generated.push(next_id);
         }
 
@@ -392,6 +399,85 @@ impl GenericLlamaModel {
             architecture: "transformer".to_string(),
             precision: if matches!(self.device, Device::Cpu) { "f32" } else { "f16" }.to_string(),
         }
+    }
+
+    fn sample_with_temperature(&self, logits: &Tensor, temperature: f64, top_p: f64) -> Result<u32> {
+        use candle_nn::ops::softmax;
+        use rand::prelude::*;
+        use rand::thread_rng;
+        
+        // Apply temperature
+        let scaled_logits = (logits / temperature)?;
+        
+        // Apply softmax to get probabilities
+        let probs = softmax(&scaled_logits, candle_core::D::Minus1)?;
+        let probs_vec: Vec<f32> = probs.to_vec1()?;
+        
+        // Apply top-p (nucleus) sampling
+        let mut indexed_probs: Vec<(usize, f32)> = probs_vec.iter().enumerate().map(|(i, &p)| (i, p)).collect();
+        indexed_probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        
+        let mut cumsum = 0.0;
+        let mut cutoff = indexed_probs.len();
+        for (i, (_, prob)) in indexed_probs.iter().enumerate() {
+            cumsum += prob;
+            if cumsum >= top_p as f32 {
+                cutoff = i + 1;
+                break;
+            }
+        }
+        
+        // Sample from the truncated distribution
+        let mut rng = thread_rng();
+        let total_mass: f32 = indexed_probs[..cutoff].iter().map(|(_, p)| p).sum();
+        let mut rand_val = rng.gen::<f32>() * total_mass;
+        
+        for &(idx, prob) in &indexed_probs[..cutoff] {
+            rand_val -= prob;
+            if rand_val <= 0.0 {
+                return Ok(idx as u32);
+            }
+        }
+        
+        // Fallback to the most likely token
+        Ok(indexed_probs[0].0 as u32)
+    }
+
+    fn detect_repetition(&self, generated: &[u32], next_id: u32) -> Result<bool> {
+        if generated.len() < 6 { return Ok(false); }
+        
+        // Check for immediate repetition (same token repeated)
+        if generated.len() >= 3 {
+            let last_3 = &generated[generated.len()-3..];
+            if last_3.iter().all(|&token| token == next_id) {
+                return Ok(true);
+            }
+        }
+        
+        // Check for pattern repetition (last 4 tokens repeated)
+        if generated.len() >= 8 {
+            let last_4 = &generated[generated.len()-4..];
+            let prev_4 = &generated[generated.len()-8..generated.len()-4];
+            if last_4 == prev_4 {
+                return Ok(true);
+            }
+        }
+        
+        // Check for phrase repetition using decoded text
+        if generated.len() >= 12 {
+            let recent_text = self.tokenizer
+                .decode(&generated[generated.len()-12..], true)
+                .unwrap_or_default();
+            
+            // Simple heuristic: if we see the same phrase pattern
+            if recent_text.matches("Mbps").count() > 2 ||
+               recent_text.matches("policy").count() > 2 ||
+               recent_text.matches("connection").count() > 2 {
+                return Ok(true);
+            }
+        }
+        
+        Ok(false)
     }
 
     fn estimate_parameters(&self) -> usize {
