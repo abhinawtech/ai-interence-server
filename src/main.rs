@@ -20,7 +20,7 @@
 // - Request queueing with backpressure to prevent memory exhaustion
 // - Graceful shutdown with in-flight request completion
 
-use ai_interence_server::api::generate::{generate_text, GenerateState};
+use ai_interence_server::api::generate::{generate_text, generate_with_file_upload, GenerateState};
 use ai_interence_server::api::health::health_check;
 use ai_interence_server::api::models::*;
 use ai_interence_server::api::vectors::create_vector_router;
@@ -29,7 +29,7 @@ use ai_interence_server::api::embedding::{create_embedding_router, create_embedd
 use ai_interence_server::api::search::{create_search_router, SearchSessionManager};
 use ai_interence_server::api::document_processing::{create_document_processing_router, DocumentProcessingApiState};
 use ai_interence_server::batching::{BatchConfig, BatchProcessor};
-use ai_interence_server::vector::{VectorStorageFactory, EmbeddingConfig};
+use ai_interence_server::vector::{VectorStorageFactory, EmbeddingConfig, create_document_pipeline, create_semantic_chunker};
 use ai_interence_server::models::{ModelVersionManager, AtomicModelSwap, version_manager::ModelStatus, initialize_models};
 use axum::{
     Router,
@@ -129,9 +129,9 @@ async fn main() -> anyhow::Result<()> {
     // 2. Automatic health check with performance benchmarking (8-12 tok/s)
     // 3. Memory usage validation and GPU resource allocation
     // 4. Generation capability testing with sample prompts
-    tracing::info!("📦 Loading initial TinyLlama model version...");
+    tracing::info!("📦 Loading initial llama-generic model version...");
     let model_id = version_manager.load_model_version(
-        "tinyllama-1.1b-chat".to_string(),
+        "llama-generic".to_string(),
         "main".to_string(),
         None
     ).await?;
@@ -263,7 +263,7 @@ async fn main() -> anyhow::Result<()> {
     // DOCUMENT PROCESSING API: Day 10 - Intelligent Document Pipeline
     tracing::info!("📄 Initializing document processing pipeline with intelligent chunking...");
     let document_processing_state = DocumentProcessingApiState::new();
-    let document_router = create_document_processing_router().with_state(document_processing_state);
+    let document_router = create_document_processing_router().with_state(document_processing_state.clone());
     tracing::info!("✅ Document processing API initialized with ingestion, chunking, and deduplication");
 
     // ARCHITECTURE: Modular Router Design with State Separation
@@ -272,21 +272,27 @@ async fn main() -> anyhow::Result<()> {
     // - Model management router handles lifecycle operations with dual state access
     // - State isolation prevents cross-contamination and improves maintainability
     
-    // INFERENCE: Enhanced Generation Router with Semantic Memory Integration
-    // Optimized for intelligent conversation context retrieval and session management:
+    // INFERENCE: Revolutionary Unified Document + RAG Generation Router  
+    // Single endpoint that handles: Document Upload → Processing → Chunking → RAG → Generation
+    // Complete pipeline integration:
     // - BatchProcessor for high-performance text generation
     // - VectorBackend for conversation storage and retrieval
     // - EmbeddingService for semantic understanding
     // - SearchSessionManager for contextual memory tracking
+    // - DocumentIngestionPipeline for document processing (NEW!)
+    // - IntelligentChunker for document chunking (NEW!)
     let generate_state: GenerateState = (
-        Arc::clone(&batch_processor), 
-        Arc::clone(&vector_backend),
-        embedding_service_state.clone(),
-        search_session_manager.clone()
+        Arc::clone(&batch_processor),                           // Text generation
+        Arc::clone(&vector_backend),                            // Vector storage for RAG
+        embedding_service_state.clone(),                        // Embedding service
+        search_session_manager.clone(),                        // Session management
+        document_processing_state.ingestion_pipeline.clone(),  // Document processing pipeline
+        document_processing_state.chunker.clone(),             // Document chunking
     );
     let generation_router = Router::new()
         .route("/health", get(health_check))
         .route("/api/v1/generate", post(generate_text))
+        .route("/api/v1/generate/upload", post(generate_with_file_upload))  // 🚀 NEW! True file upload
         .with_state(generate_state);
     
     // MANAGEMENT: Comprehensive Model Administration Router
