@@ -68,7 +68,7 @@ This is an enterprise-grade AI inference server with advanced vector database ca
 ### Key Modules
 
 #### `src/api/` - RESTful API Layer
-- `generate.rs`: Core text generation with memory integration
+- `generate.rs`: Core text generation with memory integration and dynamic model selection
 - `vectors.rs` & `vectors_enhanced.rs`: Vector database operations
 - `embedding.rs`: Text-to-vector conversion services  
 - `search.rs`: Session-aware semantic search with context
@@ -102,7 +102,9 @@ Intelligent request batching for 2-4x throughput improvement on batch workloads.
 #### Model Management Pattern
 - Models are loaded via `ModelVersionManager` with health checking
 - `AtomicModelSwap` enables zero-downtime model updates
+- Dynamic model selection through API requests with intelligent switching logic
 - Failover capabilities handle model loading failures gracefully
+- Model aliases allow user-friendly names (e.g., "tinyllama" → "tinyllama-1.1b-chat")
 
 #### Vector Database Integration
 - Factory pattern (`VectorStorageFactory`) abstracts storage backends
@@ -125,6 +127,21 @@ Intelligent request batching for 2-4x throughput improvement on batch workloads.
 - `IncrementalUpdateManager` supports incremental document updates and deduplication
 - Automatic metadata extraction and version tracking
 
+#### Unified State Architecture
+The `GenerateState` type encapsulates all core services:
+```rust
+pub type GenerateState = (
+    Arc<BatchProcessor>,                    // Text generation processing
+    Arc<VectorBackend>,                     // Vector storage for RAG
+    Arc<RwLock<EmbeddingService>>,         // Embedding generation
+    Arc<SearchSessionManager>,             // Session management for memory
+    Arc<Mutex<DocumentIngestionPipeline>>, // Document processing pipeline
+    Arc<IntelligentChunker>,               // Document chunking
+    Arc<ModelVersionManager>,              // Model version management
+);
+```
+This tuple-based state enables dependency injection across all API endpoints while maintaining type safety and enabling hot-swappable components.
+
 ## Development Context
 
 ### Performance Characteristics
@@ -133,19 +150,33 @@ Intelligent request batching for 2-4x throughput improvement on batch workloads.
 - **Throughput**: 2-4x improvement with intelligent batching
 - **Model Swapping**: <3 second hot swaps with automatic validation
 
-### Vector Database Features
+### Advanced Features
+
+#### Model Selection
+- Dynamic model switching via API parameter: `"model": "tinyllama"` or `"model": "gemma"`
+- Support for model aliases (e.g., "tinyllama", "llama-generic", "gemma")
+- Intelligent model loading with timeout handling and health validation
+- Backwards compatibility - omitting model parameter uses currently active model
+
+#### Vector Database Features
 The system implements a comprehensive vector database solution:
 
-- **Day 6-8 Implementation**: Basic vector operations, semantic search, memory integration
-- **Day 9 Implementation**: Index optimization (3 performance profiles), background reindexing system, comprehensive monitoring with alerting
-- **Day 10 Implementation**: Complete document ingestion pipeline with intelligent chunking, incremental updates, and deduplication
+- **Foundation**: Basic vector operations, semantic search, memory integration
+- **Index Management**: Index optimization (3 performance profiles), background reindexing system, comprehensive monitoring with alerting
+- **Document Processing**: Complete document ingestion pipeline with intelligent chunking, incremental updates, and deduplication
 
 ### Configuration
 Primary configuration via environment variables:
-- `HOST`, `PORT`: Server binding
+- `HOST`, `PORT`: Server binding (defaults to `0.0.0.0:3000`)
 - `MODEL_CACHE_DIR`: Model storage location
 - `MAX_CONCURRENT_REQUESTS`: Request throttling
 - `RAYON_NUM_THREADS`: Compute thread pool size
+
+The server runs on port 3000 by default. Test endpoints with:
+```bash
+curl http://localhost:3000/health
+curl -X POST http://localhost:3000/api/v1/generate -H "Content-Type: application/json" -d '{"prompt": "Hello"}'
+```
 
 ### Error Handling
 - `AppError` enum provides structured error responses
@@ -159,14 +190,20 @@ Primary configuration via environment variables:
   - `test_day9_1_index_optimization.rs`: Index optimization testing
   - `test_day9_2_background_reindexing.rs`: Background reindexing system
   - `test_day9_3_index_monitoring.rs`: Performance monitoring and alerting
-- Document processing tests: `test_day10_simple.rs`, `upload_test_document.rs`
+- Model selection can be tested with curl commands like:
+  ```bash
+  curl -X POST http://localhost:3000/api/v1/generate \
+    -H "Content-Type: application/json" \
+    -d '{"prompt": "Hello", "model": "tinyllama"}'
+  ```
 - Performance benchmarking via simulation methods
 
 ### API Endpoints
 The server provides comprehensive REST APIs organized by functionality:
 
 #### Core AI Services
-- Text generation: `/api/v1/generate`
+- Text generation: `/api/v1/generate` (supports model selection via `"model"` parameter)
+- File upload generation: `/api/v1/generate/upload` (supports model selection via form field)
 - Model management: `/api/v1/models/*` 
 - Health checks: `/health`
 
@@ -180,7 +217,7 @@ The server provides comprehensive REST APIs organized by functionality:
 - Background reindexing: `/api/v1/index/reindex`
 - Performance monitoring: `/api/v1/index/monitor/*`
 
-#### Document Processing (Day 10)
+#### Document Processing
 - Document ingestion: `/api/v1/documents/ingest`
 - File upload: `/api/v1/documents/upload`
 - Document retrieval: `/api/v1/documents/{id}`
