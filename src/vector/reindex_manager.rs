@@ -442,7 +442,7 @@ impl ReindexManager {
     /// Complete a job
     async fn complete_job(
         job_id: Uuid,
-        jobs: &Arc<RwLock<HashMap<Uuid, ReindexJobState>>>,
+        _jobs: &Arc<RwLock<HashMap<Uuid, ReindexJobState>>>,
         running_jobs: &Arc<RwLock<HashMap<Uuid, tokio::task::JoinHandle<()>>>>,
     ) {
         // Remove from running jobs

@@ -13,7 +13,7 @@ use crate::{
     vector::{IndexOptimizer, IndexProfile, IndexPerformanceMetrics, CollectionIndexConfig, 
              ReindexManager, ReindexJobStatus, ReindexJobState, JobPriority,
              IndexMonitor, PerformanceWindow, AlertSeverity, AlertRule, AlertComparison, 
-             ActiveAlert, HealthStatus, CollectionHealth, MetricDataPoint},
+             ActiveAlert, CollectionHealth, MetricDataPoint},
 };
 use uuid::Uuid;
 

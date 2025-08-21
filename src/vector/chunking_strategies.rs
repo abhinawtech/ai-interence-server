@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
 
 // ================================================================================================
 // CHUNKING CONFIGURATION
@@ -484,8 +484,10 @@ impl IntelligentChunker {
 // ================================================================================================
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct SemanticBoundary {
     position: usize,
+    #[allow(dead_code)]
     boundary_type: BoundaryType,
     confidence: f32,
 }
@@ -568,10 +570,14 @@ impl IntelligentChunker {
 // ================================================================================================
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct ContentAnalysis {
     avg_sentence_length: f32,
+    #[allow(dead_code)]
     paragraph_count: usize,
+    #[allow(dead_code)]
     code_block_ratio: f32,
+    #[allow(dead_code)]
     list_item_count: usize,
     complexity_score: f32,
 }

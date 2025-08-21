@@ -29,7 +29,7 @@ use ai_interence_server::api::embedding::{create_embedding_router, create_embedd
 use ai_interence_server::api::search::{create_search_router, SearchSessionManager};
 use ai_interence_server::api::document_processing::{create_document_processing_router, DocumentProcessingApiState};
 use ai_interence_server::batching::{BatchConfig, BatchProcessor};
-use ai_interence_server::vector::{VectorStorageFactory, EmbeddingConfig, create_document_pipeline, create_semantic_chunker};
+use ai_interence_server::vector::{VectorStorageFactory, EmbeddingConfig};
 use ai_interence_server::models::{ModelVersionManager, AtomicModelSwap, version_manager::ModelStatus, initialize_models};
 use axum::{
     Router,
@@ -288,6 +288,7 @@ async fn main() -> anyhow::Result<()> {
         search_session_manager.clone(),                        // Session management
         document_processing_state.ingestion_pipeline.clone(),  // Document processing pipeline
         document_processing_state.chunker.clone(),             // Document chunking
+        Arc::clone(&version_manager),                           // Model version management
     );
     let generation_router = Router::new()
         .route("/health", get(health_check))

@@ -404,7 +404,7 @@ impl GenericLlamaModel {
     fn sample_with_temperature(&self, logits: &Tensor, temperature: f64, top_p: f64) -> Result<u32> {
         use candle_nn::ops::softmax;
         use rand::prelude::*;
-        use rand::thread_rng;
+        use rand::rng;
         
         // Apply temperature
         let scaled_logits = (logits / temperature)?;
@@ -428,9 +428,9 @@ impl GenericLlamaModel {
         }
         
         // Sample from the truncated distribution
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let total_mass: f32 = indexed_probs[..cutoff].iter().map(|(_, p)| p).sum();
-        let mut rand_val = rng.gen::<f32>() * total_mass;
+        let mut rand_val = rng.random::<f32>() * total_mass;
         
         for &(idx, prob) in &indexed_probs[..cutoff] {
             rand_val -= prob;

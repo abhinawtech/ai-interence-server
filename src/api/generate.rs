@@ -1,8 +1,9 @@
 use crate::{batching::BatchProcessor, errors::AppError, models::ModelInfo};
+use regex::Regex;
 use crate::vector::{
-    VectorBackend, VectorPoint, EmbeddingService, DocumentFormat, ChunkingStrategy,
-    DocumentIngestionPipeline, IntelligentChunker, RawDocument, ProcessedDocument,
-    TextChunk, ChunkingResult, create_document_pipeline, create_semantic_chunker
+    VectorBackend, EmbeddingService, DocumentFormat, ChunkingStrategy,
+    DocumentIngestionPipeline, IntelligentChunker, RawDocument,
+    TextChunk
 };
 use crate::api::search::{SearchSessionManager, SemanticSearchRequest, SearchDomain, SearchFilters};
 use axum::{extract::{State, Multipart}, response::Json};
@@ -18,8 +19,8 @@ use base64::{Engine as _, engine::general_purpose};
 pub struct GenerateRequest {
     // CORE GENERATION
     pub prompt: String,              // Input text/question for generation
-    pub max_tokens: Option<usize>,   // Optional limit (default: 100)
-    pub temperature: Option<f32>,    // Future: sampling randomness control
+    pub max_tokens: Option<usize>,   // Optional limit (smart default based on complexity)
+    pub temperature: Option<f32>,    // Sampling randomness control (0.0-1.0, default: 0.3)
     pub model: Option<String>,       // Model to use (e.g., "tinyllama", "gemma")
     
     // DOCUMENT UPLOAD & PROCESSING (NEW!)
@@ -113,12 +114,13 @@ pub type GenerateState = (
     Arc<SearchSessionManager>,                             // Session management for memory
     Arc<Mutex<DocumentIngestionPipeline>>,                 // Document processing pipeline
     Arc<IntelligentChunker>,                               // Document chunking
+    Arc<crate::models::ModelVersionManager>,               // Model version management for dynamic model selection
 );
 
 // ENDPOINT: Revolutionary Unified Document + RAG Generation Handler
 // Single endpoint that handles: Document Upload → Processing → Chunking → RAG → Generation
 pub async fn generate_text(
-    State((batch_processor, vector_backend, embedding_service, session_manager, ingestion_pipeline, chunker)): State<GenerateState>,
+    State((batch_processor, vector_backend, embedding_service, session_manager, ingestion_pipeline, chunker, model_manager)): State<GenerateState>,
     Json(request): Json<GenerateRequest>,
 ) -> std::result::Result<Json<GenerateResponse>, AppError> {
     // ANALYTICS: End-to-end timing measurement
@@ -127,6 +129,65 @@ pub async fn generate_text(
 
     // SECURITY: Input validation before processing
     request.validate().map_err(AppError::Validation)?;
+
+    // MODEL SELECTION: Handle dynamic model switching if requested
+    if let Some(model_name) = &request.model {
+        tracing::info!("🔄 Model selection requested: {}", model_name);
+        
+        // Check if requested model is already active
+        let current_model_id = model_manager.get_active_model_id().await;
+        let needs_model_switch = match current_model_id {
+            Some(current_id) => {
+                // Check if current model matches requested model name
+                let model_version = model_manager.get_model_version(&current_id).await;
+                match model_version {
+                    Some(version) => {
+                        // Check if model names match (handle aliases)
+                        !version.name.to_lowercase().contains(&model_name.to_lowercase()) &&
+                        !model_name.to_lowercase().contains(&version.name.to_lowercase())
+                    },
+                    None => true // Switch if we can't get model info
+                }
+            },
+            None => true // Switch if no active model
+        };
+        
+        if needs_model_switch {
+            tracing::info!("🔄 Loading and switching to model: {}", model_name);
+            
+            // Load the model if not already loaded
+            let model_id = model_manager
+                .load_model_version(model_name.clone(), "main".to_string(), None)
+                .await
+                .map_err(|e| AppError::BadRequest(format!("Failed to load model {}: {}", model_name, e)))?;
+            
+            // Wait for model to be ready
+            let mut attempts = 0;
+            let max_attempts = 30; // 30 seconds max wait
+            while attempts < max_attempts {
+                let version = model_manager.get_model_version(&model_id).await;
+                if let Some(v) = version {
+                    if matches!(v.status, crate::models::version_manager::ModelStatus::Ready) {
+                        break;
+                    }
+                }
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                attempts += 1;
+            }
+            
+            if attempts >= max_attempts {
+                return Err(AppError::BadRequest(format!("Model {} failed to load within timeout", model_name)));
+            }
+            
+            // Switch to the newly loaded model
+            model_manager.switch_to_model(&model_id).await
+                .map_err(|e| AppError::BadRequest(format!("Failed to switch to model {}: {}", model_name, e)))?;
+            
+            tracing::info!("✅ Model {} loaded and switched successfully", model_name);
+        } else {
+            tracing::info!("✅ Requested model {} is already active", model_name);
+        }
+    }
 
     // DEFAULTS: Reasonable token limit and feature flags
     let max_tokens = request.max_tokens.unwrap_or(100);
@@ -139,7 +200,7 @@ pub async fn generate_text(
     let store_document_chunks = request.store_document_chunks.unwrap_or(true);
     let use_document_context = request.use_document_context.unwrap_or(true);
     let document_context_limit = request.document_context_limit.unwrap_or(5);
-    let document_relevance_threshold = request.document_relevance_threshold.unwrap_or(0.7);
+    let _document_relevance_threshold = request.document_relevance_threshold.unwrap_or(0.7);
 
     // SESSION MANAGEMENT: Get or create session only if memory is enabled
     let session_id = if use_memory {
@@ -147,7 +208,7 @@ pub async fn generate_text(
     } else {
         "no-memory-session".to_string() // Dummy session for no-memory requests
     };
-    let session = if use_memory {
+    let _session = if use_memory {
         session_manager.get_or_create_session(Some(session_id.clone())).await
     } else {
         // Don't create session if memory disabled
@@ -256,6 +317,7 @@ pub async fn generate_text(
                                       document_chunks.len(), 
                                       chunking_result.quality_metrics.boundary_preservation_score);
                         
+                        
                         // Step 6: Store chunks in vector database (if requested)
                         if store_document_chunks {
                             let mut stored_count = 0;
@@ -316,7 +378,7 @@ pub async fn generate_text(
 
     // SEMANTIC MEMORY RETRIEVAL: Use intelligent search for context
     let mut context_retrieved = 0;
-    let mut semantic_search_time = None;
+    let mut _semantic_search_time = None;
     let mut memory_relevance_scores = Vec::new();
     let mut detected_intent = None;
     let mut document_context_used: Option<usize> = None;
@@ -414,7 +476,7 @@ pub async fn generate_text(
         }
         
     let search_time = search_start.elapsed().as_millis() as u64;
-    semantic_search_time = Some(search_time);
+    _semantic_search_time = Some(search_time);
     
     // Build final prompt with hybrid context
     let final_prompt = if !all_context_parts.is_empty() {
@@ -437,7 +499,7 @@ pub async fn generate_text(
         
         // Extended context to ensure key information is included
         format!("Context: {}\n\nQuestion: {}\nAnswer:", 
-                clean_context.chars().take(500).collect::<String>(), // Much longer context to include "25 Mbps"
+                clean_context.chars().take(500).collect::<String>(),
                 request.prompt)
     } else {
         tracing::info!("🔍 No context found for RAG");
@@ -458,13 +520,16 @@ pub async fn generate_text(
     // OPTIMIZATION: Asynchronous Batch Processing
     // Non-blocking submission to batch queue for optimal throughput
     // Automatic batching provides 20-30% performance improvement
-    let batch_response = batch_processor
+    let mut batch_response = batch_processor
         .submit_request(final_prompt.clone(), max_tokens)
         .await
         .map_err(|e| {
             tracing::error!("Batch processing failed for request {}: {}", request_id, e);
             AppError::BadRequest(format!("Batch Processing failed: {e}"))
         })?;
+
+    // Clean up response - remove extra formatting and repetitive text
+    batch_response.text = clean_response_text(&batch_response.text);
 
     // ANALYTICS: Detailed Performance Breakdown
     let total_time = request_start.elapsed();
@@ -585,7 +650,7 @@ pub async fn generate_text(
         context_retrieved,
         document_context_used,
         session_id,
-        semantic_search_time_ms: semantic_search_time,
+        semantic_search_time_ms: _semantic_search_time,
         memory_relevance_scores,
         document_relevance_scores,
         search_intent: detected_intent,
@@ -602,10 +667,10 @@ pub async fn generate_text(
 /// ENDPOINT: Ultimate File Upload + RAG Generation Handler  
 /// True multipart file upload with instant RAG processing
 pub async fn generate_with_file_upload(
-    State((batch_processor, vector_backend, embedding_service, session_manager, ingestion_pipeline, chunker)): State<GenerateState>,
+    State((batch_processor, vector_backend, embedding_service, session_manager, ingestion_pipeline, chunker, model_manager)): State<GenerateState>,
     mut multipart: Multipart,
 ) -> std::result::Result<Json<GenerateResponse>, AppError> {
-    let request_start = Instant::now();
+    let _request_start = Instant::now();
     let request_id = Uuid::new_v4().to_string();
     
     tracing::info!("🚀 Ultimate file upload + RAG request received: {}", request_id);
@@ -621,6 +686,7 @@ pub async fn generate_with_file_upload(
     let mut max_tokens = 100;
     let mut document_context_limit = 5;
     let mut chunking_strategy: Option<ChunkingStrategy> = None;
+    let mut model_name: Option<String> = None;
     
     // Process each field in the multipart form
     while let Some(field) = multipart.next_field().await.map_err(|e| {
@@ -668,8 +734,16 @@ pub async fn generate_with_file_upload(
                 session_id = field.text().await.unwrap_or_else(|_| Uuid::new_v4().to_string());
             }
             "max_tokens" => {
-                let value = field.text().await.unwrap_or("100".to_string());
-                max_tokens = value.parse().unwrap_or(100);
+                let value = field.text().await.unwrap_or("0".to_string());
+                let parsed_tokens: usize = value.parse().unwrap_or(0);
+                max_tokens = if parsed_tokens == 0 { 
+                    100 // Will be overridden by smart calculation
+                } else { 
+                    parsed_tokens 
+                };
+            }
+            "model" => {
+                model_name = Some(field.text().await.unwrap_or_default());
             }
             "document_context_limit" => {
                 let value = field.text().await.unwrap_or("5".to_string());
@@ -700,12 +774,71 @@ pub async fn generate_with_file_upload(
     tracing::info!("✅ Parsed multipart form: prompt={}, file={}, auto_process={}", 
                    prompt.len(), filename, auto_process_document);
     
+    // MODEL SELECTION: Handle dynamic model switching if requested
+    if let Some(model) = &model_name {
+        tracing::info!("🔄 File upload - Model selection requested: {}", model);
+        
+        // Check if requested model is already active
+        let current_model_id = model_manager.get_active_model_id().await;
+        let needs_model_switch = match current_model_id {
+            Some(current_id) => {
+                // Check if current model matches requested model name
+                let model_version = model_manager.get_model_version(&current_id).await;
+                match model_version {
+                    Some(version) => {
+                        // Check if model names match (handle aliases)
+                        !version.name.to_lowercase().contains(&model.to_lowercase()) &&
+                        !model.to_lowercase().contains(&version.name.to_lowercase())
+                    },
+                    None => true // Switch if we can't get model info
+                }
+            },
+            None => true // Switch if no active model
+        };
+        
+        if needs_model_switch {
+            tracing::info!("🔄 File upload - Loading and switching to model: {}", model);
+            
+            // Load the model if not already loaded
+            let model_id = model_manager
+                .load_model_version(model.clone(), "main".to_string(), None)
+                .await
+                .map_err(|e| AppError::BadRequest(format!("Failed to load model {}: {}", model, e)))?;
+            
+            // Wait for model to be ready
+            let mut attempts = 0;
+            let max_attempts = 30; // 30 seconds max wait
+            while attempts < max_attempts {
+                let version = model_manager.get_model_version(&model_id).await;
+                if let Some(v) = version {
+                    if matches!(v.status, crate::models::version_manager::ModelStatus::Ready) {
+                        break;
+                    }
+                }
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                attempts += 1;
+            }
+            
+            if attempts >= max_attempts {
+                return Err(AppError::BadRequest(format!("Model {} failed to load within timeout", model)));
+            }
+            
+            // Switch to the newly loaded model
+            model_manager.switch_to_model(&model_id).await
+                .map_err(|e| AppError::BadRequest(format!("Failed to switch to model {}: {}", model, e)))?;
+            
+            tracing::info!("✅ File upload - Model {} loaded and switched successfully", model);
+        } else {
+            tracing::info!("✅ File upload - Requested model {} is already active", model);
+        }
+    }
+    
     // Create a unified GenerateRequest for reusing existing logic
     let unified_request = GenerateRequest {
         prompt: prompt.clone(),
         max_tokens: Some(max_tokens),
         temperature: None,
-        model: None,
+        model: model_name,
         
         // Document fields from uploaded file
         document_content: None,
@@ -737,6 +870,7 @@ pub async fn generate_with_file_upload(
         session_manager,
         ingestion_pipeline,
         chunker,
+        model_manager,
     );
     
     tracing::info!("🔄 Delegating to unified generate logic with file content");
@@ -779,16 +913,17 @@ pub struct BatchStatusResponse {
 // ENTERPRISE CONVERSATION INTELLIGENCE
 // ================================================================================================
 
-/// Enterprise-grade query intent classification
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 enum QueryIntent {
-    Personal,      // Needs user-specific context (name, background, preferences)
-    Contextual,    // Needs conversation flow context (follow-up questions)
-    General,       // Knowledge questions that don't need personal context
-    Task,          // Action-oriented queries that may need recent context
+    Personal,      // Needs user-specific context
+    Contextual,    // Needs conversation flow context
+    General,       // Knowledge questions
+    Task,          // Action-oriented queries
 }
 
 /// Classify query intent using enterprise-level pattern matching
+#[allow(dead_code)]
 fn classify_query_intent(prompt: &str) -> QueryIntent {
     let prompt_lower = prompt.to_lowercase();
     
@@ -905,6 +1040,124 @@ async fn perform_semantic_memory_search(
             Err(error_msg)
         }
     }
+}
+
+/// Smart token management based on prompt complexity
+#[allow(dead_code)]
+fn calculate_smart_max_tokens(prompt: &str, user_max_tokens: Option<usize>) -> usize {
+    if let Some(user_tokens) = user_max_tokens {
+        return user_tokens.min(500); // Cap at reasonable limit
+    }
+    
+    let prompt_complexity = prompt.split_whitespace().count();
+    let has_document_context = prompt.contains("Context:");
+    
+    match prompt_complexity {
+        0..=10 if !has_document_context => 50,   // Simple questions
+        0..=10 => 100,                           // Simple with context
+        11..=25 if !has_document_context => 100, // Medium questions
+        11..=25 => 150,                          // Medium with context
+        26..=50 => 200,                          // Complex questions
+        _ => 250,                                // Very complex questions
+    }
+}
+
+/// Clean response to remove hallucinated content
+#[allow(dead_code)]
+fn clean_response(response: &str, _context: &str) -> String {
+    let mut cleaned = response.to_string();
+    
+    // Remove common hallucination patterns
+    let hallucination_patterns = [
+        (r"https?://[^\s\n]+", "URL_REMOVED"),           // Remove URLs
+        (r"## Reference[s]?[^\n]*", ""),                 // Remove reference sections
+        (r"Source:[^\n]*", ""),                          // Remove source attributions
+        (r"According to [^,\n]*,?\s*", ""),             // Remove vague attributions
+        (r"As stated in [^,\n]*,?\s*", ""),             // Remove document references
+    ];
+    
+    for (pattern, replacement) in &hallucination_patterns {
+        if let Ok(regex) = Regex::new(pattern) {
+            cleaned = regex.replace_all(&cleaned, *replacement).to_string();
+        }
+    }
+    
+    // Clean up multiple newlines and extra spaces
+    if let Ok(regex) = Regex::new(r"\n\s*\n\s*\n") {
+        cleaned = regex.replace_all(&cleaned, "\n\n").to_string();
+    }
+    
+    cleaned.trim().to_string()
+}
+
+/// Validate response doesn't contain content not in context
+#[allow(dead_code)]
+fn validate_response(response: &str, context: &str) -> (bool, Vec<String>) {
+    let mut warnings = Vec::new();
+    let mut is_valid = true;
+    
+    // Check for URLs not in context
+    if let Ok(url_regex) = Regex::new(r"https?://[^\s\n]+") {
+        for url_match in url_regex.find_iter(response) {
+            let url = url_match.as_str();
+            if !context.contains(url) {
+                warnings.push(format!("Hallucinated URL detected: {}", url));
+                is_valid = false;
+            }
+        }
+    }
+    
+    // Check for specific company/organization names not in context
+    if let Ok(org_regex) = Regex::new(r"\b[A-Z][a-z]+ (?:Inc|Corp|Company|LLC|Ltd)\.?\b") {
+        for org_match in org_regex.find_iter(response) {
+            let org = org_match.as_str();
+            if !context.to_lowercase().contains(&org.to_lowercase()) {
+                warnings.push(format!("Potential hallucinated organization: {}", org));
+            }
+        }
+    }
+    
+    // Check for phone numbers, specific addresses not in context
+    let sensitive_patterns = [
+        (r"\b\d{3}-\d{3}-\d{4}\b", "phone number"),
+        (r"\b\d+ [A-Z][a-z]+ (?:Street|St|Avenue|Ave|Road|Rd)\b", "address"),
+    ];
+    
+    for (pattern, description) in &sensitive_patterns {
+        if let Ok(regex) = Regex::new(pattern) {
+            for sensitive_match in regex.find_iter(response) {
+                let sensitive_info = sensitive_match.as_str();
+                if !context.contains(sensitive_info) {
+                    warnings.push(format!("Potential hallucinated {}: {}", description, sensitive_info));
+                }
+            }
+        }
+    }
+    
+    (is_valid, warnings)
+}
+
+/// Clean response text by removing repetitive questions and formatting
+fn clean_response_text(response: &str) -> String {
+    let lines: Vec<&str> = response.lines().collect();
+    if lines.is_empty() {
+        return response.to_string();
+    }
+    
+    // Take only the first non-empty line as the main answer
+    let first_line = lines.iter()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(&"")
+        .trim();
+    
+    // Remove common prefixes that the model adds
+    let cleaned = first_line
+        .trim_start_matches("Answer:")
+        .trim_start_matches("Solution:")
+        .trim_start_matches("Response:")
+        .trim();
+    
+    cleaned.to_string()
 }
 
 /// Enhanced conversation storage with semantic embedding
