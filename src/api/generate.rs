@@ -1,4 +1,5 @@
 use crate::{batching::BatchProcessor, errors::AppError, models::ModelInfo};
+use regex::Regex;
 use crate::vector::{
     VectorBackend, VectorPoint, EmbeddingService, DocumentFormat, ChunkingStrategy,
     DocumentIngestionPipeline, IntelligentChunker, RawDocument, ProcessedDocument,
@@ -18,8 +19,8 @@ use base64::{Engine as _, engine::general_purpose};
 pub struct GenerateRequest {
     // CORE GENERATION
     pub prompt: String,              // Input text/question for generation
-    pub max_tokens: Option<usize>,   // Optional limit (default: 100)
-    pub temperature: Option<f32>,    // Future: sampling randomness control
+    pub max_tokens: Option<usize>,   // Optional limit (smart default based on complexity)
+    pub temperature: Option<f32>,    // Sampling randomness control (0.0-1.0, default: 0.3)
     pub model: Option<String>,       // Model to use (e.g., "tinyllama", "gemma")
     
     // DOCUMENT UPLOAD & PROCESSING (NEW!)
@@ -139,7 +140,7 @@ pub async fn generate_text(
     let store_document_chunks = request.store_document_chunks.unwrap_or(true);
     let use_document_context = request.use_document_context.unwrap_or(true);
     let document_context_limit = request.document_context_limit.unwrap_or(5);
-    let document_relevance_threshold = request.document_relevance_threshold.unwrap_or(0.7);
+    let _document_relevance_threshold = request.document_relevance_threshold.unwrap_or(0.7);
 
     // SESSION MANAGEMENT: Get or create session only if memory is enabled
     let session_id = if use_memory {
@@ -255,6 +256,7 @@ pub async fn generate_text(
                         tracing::info!("✅ Document chunked: {} chunks created with quality score: {:.3}", 
                                       document_chunks.len(), 
                                       chunking_result.quality_metrics.boundary_preservation_score);
+                        
                         
                         // Step 6: Store chunks in vector database (if requested)
                         if store_document_chunks {
@@ -437,7 +439,7 @@ pub async fn generate_text(
         
         // Extended context to ensure key information is included
         format!("Context: {}\n\nQuestion: {}\nAnswer:", 
-                clean_context.chars().take(500).collect::<String>(), // Much longer context to include "25 Mbps"
+                clean_context.chars().take(500).collect::<String>(),
                 request.prompt)
     } else {
         tracing::info!("🔍 No context found for RAG");
@@ -458,13 +460,16 @@ pub async fn generate_text(
     // OPTIMIZATION: Asynchronous Batch Processing
     // Non-blocking submission to batch queue for optimal throughput
     // Automatic batching provides 20-30% performance improvement
-    let batch_response = batch_processor
+    let mut batch_response = batch_processor
         .submit_request(final_prompt.clone(), max_tokens)
         .await
         .map_err(|e| {
             tracing::error!("Batch processing failed for request {}: {}", request_id, e);
             AppError::BadRequest(format!("Batch Processing failed: {e}"))
         })?;
+
+    // Clean up response - remove extra formatting and repetitive text
+    batch_response.text = clean_response_text(&batch_response.text);
 
     // ANALYTICS: Detailed Performance Breakdown
     let total_time = request_start.elapsed();
@@ -668,8 +673,13 @@ pub async fn generate_with_file_upload(
                 session_id = field.text().await.unwrap_or_else(|_| Uuid::new_v4().to_string());
             }
             "max_tokens" => {
-                let value = field.text().await.unwrap_or("100".to_string());
-                max_tokens = value.parse().unwrap_or(100);
+                let value = field.text().await.unwrap_or("0".to_string());
+                let parsed_tokens: usize = value.parse().unwrap_or(0);
+                max_tokens = if parsed_tokens == 0 { 
+                    100 // Will be overridden by smart calculation
+                } else { 
+                    parsed_tokens 
+                };
             }
             "document_context_limit" => {
                 let value = field.text().await.unwrap_or("5".to_string());
@@ -905,6 +915,121 @@ async fn perform_semantic_memory_search(
             Err(error_msg)
         }
     }
+}
+
+/// Smart token management based on prompt complexity
+fn calculate_smart_max_tokens(prompt: &str, user_max_tokens: Option<usize>) -> usize {
+    if let Some(user_tokens) = user_max_tokens {
+        return user_tokens.min(500); // Cap at reasonable limit
+    }
+    
+    let prompt_complexity = prompt.split_whitespace().count();
+    let has_document_context = prompt.contains("Context:");
+    
+    match prompt_complexity {
+        0..=10 if !has_document_context => 50,   // Simple questions
+        0..=10 => 100,                           // Simple with context
+        11..=25 if !has_document_context => 100, // Medium questions
+        11..=25 => 150,                          // Medium with context
+        26..=50 => 200,                          // Complex questions
+        _ => 250,                                // Very complex questions
+    }
+}
+
+/// Clean response to remove hallucinated content
+fn clean_response(response: &str, context: &str) -> String {
+    let mut cleaned = response.to_string();
+    
+    // Remove common hallucination patterns
+    let hallucination_patterns = [
+        (r"https?://[^\s\n]+", "URL_REMOVED"),           // Remove URLs
+        (r"## Reference[s]?[^\n]*", ""),                 // Remove reference sections
+        (r"Source:[^\n]*", ""),                          // Remove source attributions
+        (r"According to [^,\n]*,?\s*", ""),             // Remove vague attributions
+        (r"As stated in [^,\n]*,?\s*", ""),             // Remove document references
+    ];
+    
+    for (pattern, replacement) in &hallucination_patterns {
+        if let Ok(regex) = Regex::new(pattern) {
+            cleaned = regex.replace_all(&cleaned, *replacement).to_string();
+        }
+    }
+    
+    // Clean up multiple newlines and extra spaces
+    if let Ok(regex) = Regex::new(r"\n\s*\n\s*\n") {
+        cleaned = regex.replace_all(&cleaned, "\n\n").to_string();
+    }
+    
+    cleaned.trim().to_string()
+}
+
+/// Validate response doesn't contain content not in context
+fn validate_response(response: &str, context: &str) -> (bool, Vec<String>) {
+    let mut warnings = Vec::new();
+    let mut is_valid = true;
+    
+    // Check for URLs not in context
+    if let Ok(url_regex) = Regex::new(r"https?://[^\s\n]+") {
+        for url_match in url_regex.find_iter(response) {
+            let url = url_match.as_str();
+            if !context.contains(url) {
+                warnings.push(format!("Hallucinated URL detected: {}", url));
+                is_valid = false;
+            }
+        }
+    }
+    
+    // Check for specific company/organization names not in context
+    if let Ok(org_regex) = Regex::new(r"\b[A-Z][a-z]+ (?:Inc|Corp|Company|LLC|Ltd)\.?\b") {
+        for org_match in org_regex.find_iter(response) {
+            let org = org_match.as_str();
+            if !context.to_lowercase().contains(&org.to_lowercase()) {
+                warnings.push(format!("Potential hallucinated organization: {}", org));
+            }
+        }
+    }
+    
+    // Check for phone numbers, specific addresses not in context
+    let sensitive_patterns = [
+        (r"\b\d{3}-\d{3}-\d{4}\b", "phone number"),
+        (r"\b\d+ [A-Z][a-z]+ (?:Street|St|Avenue|Ave|Road|Rd)\b", "address"),
+    ];
+    
+    for (pattern, description) in &sensitive_patterns {
+        if let Ok(regex) = Regex::new(pattern) {
+            for sensitive_match in regex.find_iter(response) {
+                let sensitive_info = sensitive_match.as_str();
+                if !context.contains(sensitive_info) {
+                    warnings.push(format!("Potential hallucinated {}: {}", description, sensitive_info));
+                }
+            }
+        }
+    }
+    
+    (is_valid, warnings)
+}
+
+/// Clean response text by removing repetitive questions and formatting
+fn clean_response_text(response: &str) -> String {
+    let lines: Vec<&str> = response.lines().collect();
+    if lines.is_empty() {
+        return response.to_string();
+    }
+    
+    // Take only the first non-empty line as the main answer
+    let first_line = lines.iter()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(&"")
+        .trim();
+    
+    // Remove common prefixes that the model adds
+    let cleaned = first_line
+        .trim_start_matches("Answer:")
+        .trim_start_matches("Solution:")
+        .trim_start_matches("Response:")
+        .trim();
+    
+    cleaned.to_string()
 }
 
 /// Enhanced conversation storage with semantic embedding
