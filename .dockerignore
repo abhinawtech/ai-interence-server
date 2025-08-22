@@ -1,0 +1,65 @@
+# ================================================================================================
+# DOCKER IGNORE - EXCLUDE FILES FROM BUILD CONTEXT
+# ================================================================================================
+
+# Development files
+target/
+.git
+.gitignore
+*.md
+!README.md
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Data directories
+data/
+qdrant_storage/
+simple_test.txt
+test_upload.txt
+test_upload_fix.py
+
+# Frontend build artifacts (not needed for backend)
+frontend/node_modules/
+frontend/dist/
+frontend/.next/
+
+# Docker files
+docker-compose*.yml
+Dockerfile*
+
+# Kubernetes files
+k8s/
+
+# Environment files
+.env
+.env.local
+
+# Temporary files
+tmp/
+temp/
+
+# Cache directories
+.cache/
+.npm/
+.yarn/
+
+# Test files
+test_documents/
+examples/
+
+# Config files (not needed in container)
+config/nginx.conf
+config/prometheus.yml

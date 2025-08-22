@@ -1,0 +1,90 @@
+# ================================================================================================
+# RENDER.COM DEPLOYMENT CONFIGURATION
+# ================================================================================================
+#
+# This file configures automatic deployment on Render.com
+# Place this in your repository root for one-click deployment
+#
+# ================================================================================================
+
+services:
+  - type: web
+    name: ai-inference-server
+    env: docker
+    dockerfilePath: ./Dockerfile.simple
+    plan: free  # Use 'starter' for $7/month with more resources
+    region: oregon  # Choose closest to your users
+    
+    # Environment variables
+    envVars:
+      - key: HOST
+        value: "0.0.0.0"
+      - key: PORT
+        value: "10000"  # Render uses port 10000
+      - key: LOG_LEVEL
+        value: "info"
+      - key: MODEL_CACHE_DIR
+        value: "/tmp/models"  # Use /tmp for free tier
+      - key: MAX_CONCURRENT_REQUESTS
+        value: "5"  # Reduced for free tier
+      - key: RAYON_NUM_THREADS
+        value: "2"  # Reduced for free tier
+      - key: TOKENIZERS_PARALLELISM
+        value: "false"
+      - key: BATCH_MAX_SIZE
+        value: "2"  # Smaller batches for free tier
+      - key: BATCH_MAX_WAIT_MS
+        value: "200"
+      - key: BATCH_MAX_QUEUE_SIZE
+        value: "20"
+      - key: QDRANT_URL
+        value: "memory"  # Use in-memory storage for free tier
+    
+    # Health check
+    healthCheckPath: /health
+    
+    # Auto-deploy from GitHub
+    autoDeploy: true
+    
+    # Build command (optional, Docker handles this)
+    # buildCommand: docker build -f Dockerfile.simple -t ai-inference-server .
+    
+    # Start command (optional, Dockerfile handles this)
+    # startCommand: /app/ai-inference-server
+
+# ================================================================================================
+# DATABASE CONFIGURATION (Optional - for paid plans)
+# ================================================================================================
+# Uncomment if you want to add Qdrant as a separate service (requires paid plan)
+
+# databases:
+#   - name: qdrant
+#     plan: free  # or starter for persistent storage
+#     type: redis  # Render doesn't have native Qdrant, use Redis as alternative
+#     version: "7"
+
+# ================================================================================================
+# DEPLOYMENT NOTES
+# ================================================================================================
+#
+# FREE TIER LIMITATIONS:
+# - 750 hours/month (about 31 days if running 24/7)
+# - Spins down after 15 minutes of inactivity
+# - 512MB RAM limit
+# - Shared CPU
+# - No persistent storage
+#
+# TO DEPLOY:
+# 1. Push this file to your GitHub repository
+# 2. Go to render.com and connect your GitHub account
+# 3. Select "Blueprint" and choose your repository
+# 4. Render will automatically use this configuration
+#
+# UPGRADING:
+# - Change plan to "starter" ($7/month) for:
+#   - No spin-down
+#   - More CPU/RAM
+#   - Persistent storage
+#   - SSL certificates
+#
+# ================================================================================================
