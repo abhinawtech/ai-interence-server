@@ -1,0 +1,372 @@
+# ================================================================================================
+# AI INFERENCE SERVER - PRODUCTION DOCKER COMPOSE
+# ================================================================================================
+#
+# PURPOSE:
+# Complete production deployment stack for the AI inference server with Qdrant vector database,
+# monitoring, and all necessary services for a fully functional AI inference environment.
+#
+# FEATURES:
+# ✅ AI Inference Server with optimized build
+# ✅ Qdrant Vector Database with persistence
+# ✅ Prometheus monitoring and metrics
+# ✅ Grafana dashboards for visualization
+# ✅ Nginx reverse proxy with load balancing
+# ✅ Redis for session management (optional)
+# ✅ Health checks and service dependencies
+# ✅ Volume persistence for data
+# ✅ Environment-based configuration
+# ✅ Production-ready networking
+#
+# USAGE:
+# docker-compose up -d                    # Start all services
+# docker-compose up ai-inference         # Start only AI server + dependencies
+# docker-compose logs -f ai-inference    # View logs
+# docker-compose down                     # Stop all services
+#
+# ================================================================================================
+
+version: '3.8'
+
+# ================================================================================================
+# SERVICES DEFINITION
+# ================================================================================================
+services:
+
+  # ==============================================================================================
+  # AI INFERENCE SERVER - MAIN APPLICATION
+  # ==============================================================================================
+  ai-inference:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        FEATURES: ""  # Set to "cuda" for GPU support
+    image: ai-inference-server:latest
+    container_name: ai-inference-server
+    restart: unless-stopped
+    
+    # Port mapping
+    ports:
+      - "3000:3000"
+    
+    # Environment configuration
+    environment:
+      # Server settings
+      - HOST=0.0.0.0
+      - PORT=3000
+      - LOG_LEVEL=info
+      
+      # Model settings
+      - MODEL_CACHE_DIR=/app/models
+      - MAX_CONCURRENT_REQUESTS=20
+      
+      # Performance tuning
+      - RAYON_NUM_THREADS=4
+      - TOKENIZERS_PARALLELISM=false
+      - BATCH_MAX_SIZE=8
+      - BATCH_MAX_WAIT_MS=100
+      - BATCH_MAX_QUEUE_SIZE=100
+      
+      # Vector database connection
+      - QDRANT_URL=http://qdrant:6334
+      
+    # Volume mounts
+    volumes:
+      - ai_models:/app/models
+      - ai_logs:/app/logs
+      - ai_data:/app/data
+    
+    # Service dependencies
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    
+    # Networking
+    networks:
+      - ai-network
+    
+    # Labels for monitoring
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ai-inference.rule=Host(`ai.localhost`)"
+      - "traefik.http.services.ai-inference.loadbalancer.server.port=3000"
+
+  # ==============================================================================================
+  # QDRANT VECTOR DATABASE
+  # ==============================================================================================
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    container_name: qdrant-production
+    restart: unless-stopped
+    
+    # Port mapping
+    ports:
+      - "6333:6333"  # HTTP API
+      - "6334:6334"  # gRPC API
+    
+    # Environment configuration
+    environment:
+      # Performance settings
+      - QDRANT__LOG_LEVEL=INFO
+      - QDRANT__HTTP_PORT=6333
+      - QDRANT__GRPC_PORT=6334
+      
+      # Storage configuration
+      - QDRANT__STORAGE__STORAGE_PATH=/qdrant/storage
+      - QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/snapshots
+      - QDRANT__STORAGE__TEMP_PATH=/tmp/qdrant
+      
+      # Performance optimization
+      - QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS=8
+      - QDRANT__STORAGE__PERFORMANCE__MAX_OPTIMIZATION_THREADS=4
+      - QDRANT__STORAGE__PERFORMANCE__INDEXING_THRESHOLD=50000
+      
+      # HNSW configuration
+      - QDRANT__STORAGE__HNSW__M=64
+      - QDRANT__STORAGE__HNSW__EF_CONSTRUCT=1024
+      - QDRANT__STORAGE__HNSW__FULL_SCAN_THRESHOLD=20000
+      
+      # API configuration
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__ENABLE_CORS=true
+      - QDRANT__SERVICE__MAX_REQUEST_SIZE_MB=128
+      - QDRANT__SERVICE__MAX_WORKERS=8
+      
+      # Clustering disabled for single-node deployment
+      - QDRANT__CLUSTER__ENABLED=false
+      
+    # Volume mounts for persistence
+    volumes:
+      - qdrant_storage:/qdrant/storage
+      - qdrant_snapshots:/qdrant/snapshots
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    
+    # Networking
+    networks:
+      - ai-network
+
+  # ==============================================================================================
+  # NGINX REVERSE PROXY (OPTIONAL)
+  # ==============================================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: ai-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - ai-inference
+    networks:
+      - ai-network
+    profiles:
+      - "production"
+
+  # ==============================================================================================
+  # PROMETHEUS MONITORING (OPTIONAL)
+  # ==============================================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ai-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - ai-network
+    profiles:
+      - "monitoring"
+
+  # ==============================================================================================
+  # GRAFANA DASHBOARDS (OPTIONAL)
+  # ==============================================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ai-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - ai-network
+    profiles:
+      - "monitoring"
+
+  # ==============================================================================================
+  # REDIS FOR SESSION MANAGEMENT (OPTIONAL)
+  # ==============================================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: ai-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    networks:
+      - ai-network
+    profiles:
+      - "cache"
+
+# ================================================================================================
+# VOLUME DEFINITIONS
+# ================================================================================================
+volumes:
+  # AI Inference Server volumes
+  ai_models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/models
+
+  ai_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/logs
+
+  ai_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/inference
+
+  # Qdrant volumes
+  qdrant_storage:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/qdrant/storage
+
+  qdrant_snapshots:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/qdrant/snapshots
+
+  # Monitoring volumes
+  prometheus_data:
+    driver: local
+  
+  grafana_data:
+    driver: local
+  
+  redis_data:
+    driver: local
+
+# ================================================================================================
+# NETWORK DEFINITIONS
+# ================================================================================================
+networks:
+  ai-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.25.0.0/16
+          gateway: 172.25.0.1
+
+# ================================================================================================
+# DEPLOYMENT PROFILES AND EXAMPLES
+# ================================================================================================
+#
+# DEPLOYMENT PROFILES:
+#
+# 1. Basic deployment (AI server + Qdrant only):
+#    docker-compose up -d ai-inference qdrant
+#
+# 2. Production deployment with reverse proxy:
+#    docker-compose --profile production up -d
+#
+# 3. Full monitoring stack:
+#    docker-compose --profile monitoring up -d
+#
+# 4. Complete deployment with all services:
+#    docker-compose --profile production --profile monitoring --profile cache up -d
+#
+# SCALING EXAMPLES:
+#
+# 1. Scale AI inference servers:
+#    docker-compose up -d --scale ai-inference=3
+#
+# 2. Scale Qdrant (with clustering):
+#    docker-compose up -d --scale qdrant=3
+#
+# MANAGEMENT COMMANDS:
+#
+# 1. View logs:
+#    docker-compose logs -f ai-inference
+#    docker-compose logs -f qdrant
+#
+# 2. Update services:
+#    docker-compose pull && docker-compose up -d
+#
+# 3. Backup data:
+#    docker-compose exec qdrant curl -X POST http://localhost:6333/snapshots
+#
+# 4. Monitor resources:
+#    docker-compose exec ai-inference curl http://localhost:3000/health
+#
+# ================================================================================================

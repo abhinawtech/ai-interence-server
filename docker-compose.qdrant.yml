@@ -99,8 +99,8 @@ services:
       QDRANT__SERVICE__MAX_REQUEST_SIZE_MB: 64
       QDRANT__SERVICE__MAX_WORKERS: 4
       
-      # Security Settings (development mode)
-      QDRANT__SERVICE__API_KEY: ""  # No API key for local development
+      # Security Settings (development mode - disable authentication)
+      # QDRANT__SERVICE__API_KEY: ""  # Commented out to disable API key requirement
       QDRANT__SERVICE__READ_ONLY: false
       
       # Telemetry and Monitoring

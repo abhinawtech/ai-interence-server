@@ -35,6 +35,7 @@ use axum::{
     Router,
     routing::{get, post},
 };
+use tower_http::cors::{CorsLayer, Any};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::signal;
@@ -325,7 +326,13 @@ async fn main() -> anyhow::Result<()> {
         .merge(enhanced_vector_router)
         .merge(embedding_router)
         .merge(search_router)
-        .merge(document_router);
+        .merge(document_router)
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any)
+        );
 
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "3000".to_string())
