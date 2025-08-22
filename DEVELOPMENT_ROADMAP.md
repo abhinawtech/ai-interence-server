@@ -68,18 +68,20 @@
 ## 🚀 NEXT PHASES TO IMPLEMENT
 
 ### 📱 **Phase 5: Frontend Development (PRIORITY 1)**
+**Design Goal: ChatGPT-style UI/UX with modern, clean interface**
 
 #### **5.1 Frontend Foundation**
 - [ ] **Technology Stack Setup**
   - [ ] Create React + Vite + TypeScript project
-  - [ ] Setup Tailwind CSS for styling
+  - [ ] Setup Tailwind CSS for styling (ChatGPT-style design system)
   - [ ] Configure ESLint and Prettier
   - [ ] Setup project structure and components
 
-- [ ] **Core UI Components**
-  - [ ] Chat interface with message bubbles
-  - [ ] File upload component with drag & drop
-  - [ ] Loading states and animations
+- [ ] **Core UI Components (ChatGPT-style)**
+  - [ ] Chat interface with message bubbles (user/assistant distinction)
+  - [ ] Left sidebar with conversation history and model selection
+  - [ ] File upload component with drag & drop (ChatGPT-style)
+  - [ ] Loading states and animations (typing indicators, pulse effects)
   - [ ] Error handling and toast notifications
   - [ ] Responsive design for mobile/desktop
 
@@ -97,34 +99,37 @@
   - [ ] Real-time response streaming (if implemented)
   - [ ] Session management
 
-#### **5.3 User Experience Features**
+#### **5.3 User Experience Features (ChatGPT-style)**
 - [ ] **Chat Interface**
-  - [ ] Message history display
-  - [ ] Typing indicators
-  - [ ] Message timestamps
-  - [ ] Copy response to clipboard
+  - [ ] Message history display with smooth scrolling
+  - [ ] Typing indicators (3-dot animation like ChatGPT)
+  - [ ] Message timestamps (subtle, on hover)
+  - [ ] Copy response to clipboard with feedback
   - [ ] Clear conversation button
+  - [ ] Conversation titles and history in sidebar
 
 - [ ] **Document Management**
-  - [ ] Document preview before upload
-  - [ ] Supported file format indicators
-  - [ ] Upload progress tracking
-  - [ ] Document processing status
-  - [ ] Multiple file upload queue
+  - [ ] Document preview before upload (ChatGPT-style attachment UI)
+  - [ ] Supported file format indicators with icons
+  - [ ] Upload progress tracking with progress bars
+  - [ ] Document processing status indicators
+  - [ ] Multiple file upload queue management
 
 - [ ] **Settings & Configuration**
-  - [ ] Adjustable parameters (max_tokens, temperature)
-  - [ ] Model selection (if multiple models)
-  - [ ] Dark/light theme toggle
-  - [ ] API connection settings
+  - [ ] Model selection dropdown in sidebar (like ChatGPT model picker)
+  - [ ] Adjustable parameters (max_tokens, temperature) in settings modal
+  - [ ] Dark/light theme toggle (ChatGPT-style)
+  - [ ] API connection settings panel
 
-#### **5.4 Advanced Features**
+#### **5.4 Advanced Features (ChatGPT-style)**
 - [ ] **Enhanced UI/UX**
-  - [ ] Syntax highlighting for code responses
-  - [ ] Markdown rendering support
-  - [ ] Keyboard shortcuts
-  - [ ] Auto-save conversation history
-  - [ ] Export conversation to file
+  - [ ] Syntax highlighting for code responses (like ChatGPT code blocks)
+  - [ ] Markdown rendering support with proper formatting
+  - [ ] Keyboard shortcuts (Cmd+Enter to send, Cmd+/ for shortcuts menu)
+  - [ ] Auto-save conversation history to local storage
+  - [ ] Export conversation to file (like ChatGPT export feature)
+  - [ ] Message regeneration capability
+  - [ ] Stop generation button during response streaming
 
 - [ ] **Performance Optimization**
   - [ ] Lazy loading of components
@@ -276,11 +281,11 @@
 
 ## 📋 **IMMEDIATE ACTION ITEMS (Next 2 Weeks)**
 
-### **Week 1: Frontend Foundation**
-1. **Day 1-2**: Setup React + Vite project with TypeScript
-2. **Day 3-4**: Create basic chat interface and file upload UI
-3. **Day 5-6**: Connect to existing APIs and test integration
-4. **Day 7**: Polish UI/UX and add error handling
+### **Week 1: Frontend Foundation (ChatGPT-style)**
+1. **Day 1-2**: Setup React + Vite project with TypeScript + ChatGPT-style layout
+2. **Day 3-4**: Create ChatGPT-style chat interface with sidebar and message bubbles
+3. **Day 5-6**: Connect to existing APIs and implement model selection
+4. **Day 7**: Polish ChatGPT-style UI/UX and add error handling
 
 ### **Week 2: Feature Enhancement**
 1. **Day 8-9**: Add advanced UI features (settings, themes, history)
@@ -296,12 +301,13 @@
 
 ## 🎯 **SUCCESS METRICS**
 
-### **Frontend Completion Criteria**
-- [ ] User can upload documents and chat with them
+### **Frontend Completion Criteria (ChatGPT-style)**
+- [ ] User can upload documents and chat with them in ChatGPT-style interface
+- [ ] Left sidebar with conversation history and model selection (like ChatGPT)
 - [ ] All APIs are properly integrated and tested
-- [ ] Responsive design works on mobile and desktop
-- [ ] Error handling provides clear user feedback
-- [ ] Performance is acceptable for production use
+- [ ] Responsive design works on mobile and desktop (ChatGPT-style responsive)
+- [ ] Error handling provides clear user feedback with ChatGPT-style notifications
+- [ ] Performance is acceptable for production use with smooth animations
 
 ### **Production Readiness Criteria**
 - [ ] System handles 100+ concurrent users
@@ -314,9 +320,10 @@
 
 ## 📝 **NOTES**
 
-- **Current Status**: Backend APIs are complete and working well
-- **Focus**: Frontend development is the highest priority
-- **Timeline**: Aim for complete system in 4-6 weeks
+- **Current Status**: Backend APIs are complete and working well with model selection
+- **Focus**: ChatGPT-style frontend development is the highest priority
+- **Design Goal**: Replicate ChatGPT's clean, intuitive UI/UX patterns
+- **Timeline**: Aim for complete ChatGPT-style system in 4-6 weeks
 - **Deployment**: Target cloud deployment after frontend completion
 - **Architecture**: Microservices-ready design for future scaling
 

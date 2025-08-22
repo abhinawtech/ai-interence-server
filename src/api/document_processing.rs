@@ -292,9 +292,11 @@ pub async fn upload_file_document(
     let mut file_name: Option<String> = None;
     let mut metadata: HashMap<String, String> = HashMap::new();
 
-    // Process multipart fields
-    while let Some(field) = multipart.next_field().await
-        .map_err(|e| AppError::Processing(format!("Multipart parsing failed: {}", e)))? {
+    // Process multipart fields with timeout protection
+    let multipart_timeout = tokio::time::Duration::from_secs(30);
+    let multipart_future = async {
+        while let Some(field) = multipart.next_field().await
+            .map_err(|e| AppError::Processing(format!("Multipart parsing failed: {}", e)))? {
         
         let field_name = field.name().unwrap_or("unknown").to_string();
         
@@ -334,7 +336,15 @@ pub async fn upload_file_document(
                 metadata.insert(field_name, value);
             }
         }
-    }
+        }
+        Ok::<(), AppError>(())
+    };
+    
+    // Execute multipart processing with timeout
+    tokio::time::timeout(multipart_timeout, multipart_future)
+        .await
+        .map_err(|_| AppError::Processing("Multipart processing timeout (30s)".to_string()))?
+        .map_err(|e| e)?;
 
     // Validate required fields
     let content = file_content.ok_or_else(|| {

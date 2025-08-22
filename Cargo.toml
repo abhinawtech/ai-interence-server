@@ -33,6 +33,7 @@ hf-hub = { version = "0.4.3", features = ["tokio"] }
 thiserror = "2.0.16"
 chrono = { version = "0.4", features = ["serde"] }
 tower = { version = "0.5.2", features = ["util"] }
+tower-http = { version = "0.6.2", features = ["cors"] }
 dotenv = "0.15"
 reqwest = { version = "0.12.23", features = ["json"] }
 url = "2.5"

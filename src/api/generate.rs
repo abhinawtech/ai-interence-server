@@ -688,10 +688,12 @@ pub async fn generate_with_file_upload(
     let mut chunking_strategy: Option<ChunkingStrategy> = None;
     let mut model_name: Option<String> = None;
     
-    // Process each field in the multipart form
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        AppError::BadRequest(format!("Failed to process multipart data: {}", e))
-    })? {
+    // Process each field in the multipart form with timeout protection
+    let multipart_timeout = tokio::time::Duration::from_secs(30); // 30 second timeout for multipart processing
+    let multipart_future = async {
+        while let Some(field) = multipart.next_field().await.map_err(|e| {
+            AppError::BadRequest(format!("Failed to process multipart data: {}", e))
+        })? {
         let field_name = field.name().unwrap_or("unknown").to_string();
         
         match field_name.as_str() {
@@ -756,11 +758,20 @@ pub async fn generate_with_file_upload(
                 }
             }
             _ => {
-                // Ignore unknown fields
+                // Ignore unknown fields but MUST consume the field data to prevent hanging
                 tracing::debug!("Ignoring unknown field: {}", field_name);
+                let _ = field.bytes().await; // Consume the field data
             }
         }
-    }
+        }
+        Ok::<(), AppError>(())
+    };
+    
+    // Execute multipart processing with timeout
+    tokio::time::timeout(multipart_timeout, multipart_future)
+        .await
+        .map_err(|_| AppError::BadRequest("Multipart processing timeout (30s)".to_string()))?
+        .map_err(|e| e)?;
     
     // Validation
     if prompt.trim().is_empty() {

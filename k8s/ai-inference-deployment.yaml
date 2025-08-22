@@ -1,0 +1,541 @@
+# ================================================================================================
+# AI INFERENCE SERVER - KUBERNETES DEPLOYMENT
+# ================================================================================================
+#
+# PURPOSE:
+# Production-grade Kubernetes deployment for the AI inference server with high availability,
+# auto-scaling, and comprehensive monitoring for cloud-native AI workloads.
+#
+# FEATURES:
+# ✅ High availability with multiple replicas
+# ✅ Rolling updates with zero downtime
+# ✅ Resource optimization for AI workloads
+# ✅ Health checks and readiness probes
+# ✅ Horizontal Pod Autoscaler (HPA)
+# ✅ Security contexts and RBAC
+# ✅ Service mesh ready
+# ✅ Persistent storage integration
+# ✅ ConfigMap and Secret management
+# ✅ Pod disruption budgets
+#
+# ================================================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-inference-system
+  labels:
+    name: ai-inference-system
+    app.kubernetes.io/part-of: ai-platform
+
+---
+# ================================================================================================
+# CONFIGMAP FOR APPLICATION CONFIGURATION
+# ================================================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-inference-config
+  namespace: ai-inference-system
+  labels:
+    app.kubernetes.io/name: ai-inference
+    app.kubernetes.io/component: config
+data:
+  # Server configuration
+  HOST: "0.0.0.0"
+  PORT: "3000"
+  LOG_LEVEL: "info"
+  
+  # Model configuration
+  MODEL_CACHE_DIR: "/app/models"
+  MAX_CONCURRENT_REQUESTS: "20"
+  
+  # Performance tuning
+  RAYON_NUM_THREADS: "4"
+  TOKENIZERS_PARALLELISM: "false"
+  BATCH_MAX_SIZE: "8"
+  BATCH_MAX_WAIT_MS: "100"
+  BATCH_MAX_QUEUE_SIZE: "100"
+  
+  # Vector database configuration
+  QDRANT_URL: "http://qdrant.qdrant-system.svc.cluster.local:6334"
+
+---
+# ================================================================================================
+# SECRET FOR SENSITIVE CONFIGURATION
+# ================================================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ai-inference-secrets
+  namespace: ai-inference-system
+  labels:
+    app.kubernetes.io/name: ai-inference
+    app.kubernetes.io/component: secrets
+type: Opaque
+data:
+  # Base64 encoded values (replace with actual secrets)
+  api-key: ""  # echo -n "your-api-key" | base64
+  # huggingface-token: ""  # echo -n "your-hf-token" | base64
+
+---
+# ================================================================================================
+# SERVICE ACCOUNT
+# ================================================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ai-inference-service-account
+  namespace: ai-inference-system
+  labels:
+    app.kubernetes.io/name: ai-inference
+    app.kubernetes.io/component: rbac
+automountServiceAccountToken: false
+
+---
+# ================================================================================================
+# PERSISTENT VOLUME CLAIMS
+# ================================================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ai-models-pvc
+  namespace: ai-inference-system
+  labels:
+    app.kubernetes.io/name: ai-inference
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteMany  # Shared across pods for model storage
+  resources:
+    requests:
+      storage: 100Gi  # Adjust based on model sizes
+  storageClassName: fast-ssd  # Use high-performance storage
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ai-logs-pvc
+  namespace: ai-inference-system
+  labels:
+    app.kubernetes.io/name: ai-inference
+    app.kubernetes.io/component: logging
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: standard
+
+---
+# ================================================================================================
+# DEPLOYMENT
+# ================================================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-inference
+  namespace: ai-inference-system
+  labels:
+    app.kubernetes.io/name: ai-inference
+    app.kubernetes.io/component: server
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/part-of: ai-platform
+    app.kubernetes.io/managed-by: kubernetes
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    description: "AI inference server with vector database integration"
+spec:
+  # ==============================================================================================
+  # DEPLOYMENT STRATEGY
+  # ==============================================================================================
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-inference
+      app.kubernetes.io/component: server
+  
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-inference
+        app.kubernetes.io/component: server
+        app.kubernetes.io/version: "1.0.0"
+        app.kubernetes.io/part-of: ai-platform
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+        kubectl.kubernetes.io/default-container: ai-inference
+    spec:
+      # ============================================================================================
+      # SECURITY CONTEXT
+      # ============================================================================================
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      
+      # ============================================================================================
+      # SERVICE ACCOUNT
+      # ============================================================================================
+      serviceAccountName: ai-inference-service-account
+      automountServiceAccountToken: false
+      
+      # ============================================================================================
+      # POD PLACEMENT AND AFFINITY
+      # ============================================================================================
+      affinity:
+        # Spread pods across different nodes
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values: ["ai-inference"]
+              topologyKey: kubernetes.io/hostname
+        
+        # Prefer GPU nodes if available
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 50
+            preference:
+              matchExpressions:
+              - key: accelerator
+                operator: In
+                values: ["nvidia-tesla-v100", "nvidia-tesla-t4", "nvidia-a100"]
+      
+      # ============================================================================================
+      # TOLERATIONS
+      # ============================================================================================
+      tolerations:
+      - key: "ai-workload"
+        operator: "Equal"
+        value: "inference"
+        effect: "NoSchedule"
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      
+      # ============================================================================================
+      # INITIALIZATION
+      # ============================================================================================
+      initContainers:
+      - name: model-downloader
+        image: busybox:1.35
+        command: ['sh', '-c']
+        args:
+        - |
+          echo "Preparing model storage..."
+          mkdir -p /models/cache
+          chown -R 1000:1000 /models
+          echo "Model storage ready"
+        securityContext:
+          runAsUser: 0
+        volumeMounts:
+        - name: ai-models
+          mountPath: /models
+      
+      # ============================================================================================
+      # MAIN CONTAINER
+      # ============================================================================================
+      containers:
+      - name: ai-inference
+        image: ai-inference-server:latest  # Replace with your registry
+        imagePullPolicy: IfNotPresent
+        
+        # ==========================================================================================
+        # SECURITY CONTEXT
+        # ==========================================================================================
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        
+        # ==========================================================================================
+        # RESOURCE ALLOCATION
+        # ==========================================================================================
+        resources:
+          requests:
+            cpu: "2"         # 2 CPU cores minimum
+            memory: "4Gi"    # 4GB memory minimum
+            ephemeral-storage: "10Gi"
+            # nvidia.com/gpu: "1"  # Uncomment for GPU support
+          limits:
+            cpu: "8"         # 8 CPU cores maximum
+            memory: "16Gi"   # 16GB memory maximum
+            ephemeral-storage: "20Gi"
+            # nvidia.com/gpu: "1"  # Uncomment for GPU support
+        
+        # ==========================================================================================
+        # ENVIRONMENT VARIABLES
+        # ==========================================================================================
+        envFrom:
+        - configMapRef:
+            name: ai-inference-config
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        
+        # ==========================================================================================
+        # PORT CONFIGURATION
+        # ==========================================================================================
+        ports:
+        - name: http
+          containerPort: 3000
+          protocol: TCP
+        
+        # ==========================================================================================
+        # HEALTH CHECKS
+        # ==========================================================================================
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 90
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+          successThreshold: 1
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30  # Allow 5 minutes for startup
+          successThreshold: 1
+        
+        # ==========================================================================================
+        # VOLUME MOUNTS
+        # ==========================================================================================
+        volumeMounts:
+        # Model storage
+        - name: ai-models
+          mountPath: /app/models
+        
+        # Logs storage
+        - name: ai-logs
+          mountPath: /app/logs
+        
+        # Temporary directory (writable)
+        - name: tmp-dir
+          mountPath: /tmp
+        
+        # Application data
+        - name: app-data
+          mountPath: /app/data
+        
+        # ==========================================================================================
+        # LIFECYCLE HOOKS
+        # ==========================================================================================
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - |
+                echo "Graceful shutdown initiated"
+                sleep 15  # Allow time for requests to complete
+      
+      # ============================================================================================
+      # VOLUME DEFINITIONS
+      # ============================================================================================
+      volumes:
+      # Persistent storage
+      - name: ai-models
+        persistentVolumeClaim:
+          claimName: ai-models-pvc
+      
+      - name: ai-logs
+        persistentVolumeClaim:
+          claimName: ai-logs-pvc
+      
+      # Temporary directories
+      - name: tmp-dir
+        emptyDir:
+          sizeLimit: 2Gi
+      
+      - name: app-data
+        emptyDir:
+          sizeLimit: 1Gi
+      
+      # ============================================================================================
+      # DNS AND NETWORKING
+      # ============================================================================================
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+
+---
+# ================================================================================================
+# SERVICE
+# ================================================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-inference
+  namespace: ai-inference-system
+  labels:
+    app.kubernetes.io/name: ai-inference
+    app.kubernetes.io/component: service
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"  # For AWS
+spec:
+  type: ClusterIP  # Change to LoadBalancer for external access
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: ai-inference
+    app.kubernetes.io/component: server
+
+---
+# ================================================================================================
+# HORIZONTAL POD AUTOSCALER
+# ================================================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ai-inference-hpa
+  namespace: ai-inference-system
+  labels:
+    app.kubernetes.io/name: ai-inference
+    app.kubernetes.io/component: autoscaling
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ai-inference
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 3
+        periodSeconds: 60
+
+---
+# ================================================================================================
+# POD DISRUPTION BUDGET
+# ================================================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ai-inference-pdb
+  namespace: ai-inference-system
+  labels:
+    app.kubernetes.io/name: ai-inference
+    app.kubernetes.io/component: availability
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-inference
+      app.kubernetes.io/component: server
+
+---
+# ================================================================================================
+# INGRESS (OPTIONAL)
+# ================================================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ai-inference-ingress
+  namespace: ai-inference-system
+  labels:
+    app.kubernetes.io/name: ai-inference
+    app.kubernetes.io/component: ingress
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+  - hosts:
+    - ai-inference.your-domain.com
+    secretName: ai-inference-tls
+  rules:
+  - host: ai-inference.your-domain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: ai-inference
+            port:
+              number: 80
