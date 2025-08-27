@@ -32,6 +32,7 @@ use ai_interence_server::api::memory_monitor::create_memory_monitor_router;
 use ai_interence_server::batching::{BatchConfig, BatchProcessor};
 use ai_interence_server::vector::{VectorStorageFactory, EmbeddingConfig};
 use ai_interence_server::models::{ModelVersionManager, AtomicModelSwap, version_manager::ModelStatus, initialize_models};
+use ai_interence_server::gpu_detection::{detect_gpu_backend, print_gpu_info, get_optimal_thread_count, get_optimal_batch_size};
 use axum::{
     Router,
     routing::{get, post},
@@ -43,11 +44,12 @@ use tokio::signal;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // OPTIMIZATION: Thread Configuration
-    // Set reasonable thread count for compute-intensive tasks
-    // Can be overridden by environment variable if needed
+    // OPTIMIZATION: GPU-Aware Thread Configuration
+    // Automatically adjust thread count based on available hardware
     if std::env::var("RAYON_NUM_THREADS").is_err() {
-        std::env::set_var("RAYON_NUM_THREADS", "4");
+        let optimal_threads = get_optimal_thread_count(&detect_gpu_backend());
+        std::env::set_var("RAYON_NUM_THREADS", optimal_threads.to_string());
+        tracing::info!("🧵 Auto-configured {} threads for optimal performance", optimal_threads);
     }
     
     // COMPATIBILITY: Disable tokenizer parallelism to avoid conflicts
@@ -65,35 +67,39 @@ async fn main() -> anyhow::Result<()> {
         .with_line_number(true)
         .init();
 
-    tracing::info!("🚀 Starting AI Inference Server with Batching");
+    tracing::info!("🚀 Starting AI Inference Server with Smart GPU Detection");
+
+    // HARDWARE DETECTION: Auto-detect optimal GPU backend
+    let gpu_backend = detect_gpu_backend();
+    print_gpu_info(&gpu_backend);
 
     // ARCHITECTURE: Initialize Model Registry
     // This sets up the new trait-based model system that supports dynamic model loading
     initialize_models()?;
 
-    // CONFIGURATION: Dynamic Batch Settings
-    // Environment variables allow runtime tuning without recompilation
-    // Defaults optimized for typical development/production environments
+    // CONFIGURATION: GPU-Optimized Batch Settings
+    // Automatically adjusted based on detected hardware capabilities
     let batch_config = BatchConfig {
-        // TUNING: Batch size balances latency vs throughput
-        // 4 requests = good balance for single-user scenarios
-        // 8+ requests = better for high-load production
-        max_batch_size: std::env::var("BATCH_MAX_SIZE")
-            .unwrap_or_else(|_| "4".to_string())
-            .parse()
-            .unwrap_or(4),
+        // TUNING: GPU-aware batch sizing for optimal throughput
+        max_batch_size: get_optimal_batch_size(&gpu_backend),
             
-        // LATENCY: Wait time determines responsiveness
-        // 100ms = good balance, 50ms = more responsive, 200ms = higher throughput
+        // LATENCY: GPU backends can handle faster processing
         max_wait_time_ms: std::env::var("BATCH_MAX_WAIT_MS")
-            .unwrap_or_else(|_| "100".to_string())
+            .unwrap_or_else(|_| match gpu_backend {
+                ai_interence_server::gpu_detection::GpuBackend::Cuda => "50".to_string(),
+                ai_interence_server::gpu_detection::GpuBackend::Metal => "75".to_string(),
+                ai_interence_server::gpu_detection::GpuBackend::Cpu => "100".to_string(),
+            })
             .parse()
             .unwrap_or(100),
             
-        // SCALABILITY: Queue size prevents memory exhaustion
-        // 50 requests = ~100KB memory overhead
+        // SCALABILITY: Larger queues for GPU backends
         max_queue_size: std::env::var("BATCH_MAX_QUEUE_SIZE")
-            .unwrap_or_else(|_| "50".to_string())
+            .unwrap_or_else(|_| match gpu_backend {
+                ai_interence_server::gpu_detection::GpuBackend::Cuda => "100".to_string(),
+                ai_interence_server::gpu_detection::GpuBackend::Metal => "75".to_string(),
+                ai_interence_server::gpu_detection::GpuBackend::Cpu => "25".to_string(),
+            })
             .parse()
             .unwrap_or(50),
     };

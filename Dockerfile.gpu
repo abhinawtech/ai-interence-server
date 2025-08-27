@@ -1,0 +1,43 @@
+# GPU-Enabled Dockerfile with Auto-Detection
+FROM nvidia/cuda:12.2-devel-ubuntu22.04 as builder
+
+# Install Rust
+RUN apt-get update && apt-get install -y \
+    curl \
+    pkg-config \
+    libssl-dev \
+    build-essential \
+    ca-certificates \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /app
+COPY . .
+
+# Build with CUDA support
+RUN cargo build --release --features cuda
+
+# Runtime stage
+FROM nvidia/cuda:12.2-runtime-ubuntu22.04
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /app/target/release/ai-interence-server ./server
+
+# GPU environment
+ENV CUDA_VISIBLE_DEVICES=0
+ENV FORCE_GPU_BACKEND=cuda
+ENV HOST=0.0.0.0
+ENV PORT=3000
+
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+CMD ["./server"]

@@ -1,5 +1,17 @@
 [build]
-dockerfile = "Dockerfile.railway"
+dockerfile = "Dockerfile"
 
 [deploy]
 healthcheckPath = "/health"
+
+# Environment variables
+[env]
+HOST = "0.0.0.0"
+PORT = "3000"
+RUST_LOG = "info"
+TOKENIZERS_PARALLELISM = "false"
+RAYON_NUM_THREADS = "2"
+EMBEDDING_CACHE_SIZE = "200"
+BATCH_MAX_SIZE = "2"
+# Add your HF token here (or use Railway dashboard)
+HF_TOKEN = "${{HF_TOKEN}}"
