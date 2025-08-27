@@ -114,8 +114,10 @@ WORKDIR /app
 # Copy the built binary from builder stage
 COPY --from=builder /tmp/target/release/ai-interence-server /app/ai-inference-server
 
-# Copy configuration files if they exist (optional)
-COPY --chown=aiserver:aiserver config/ /app/config/ || echo "No config directory found, skipping..."
+# Create config directory and copy files if they exist
+RUN mkdir -p /app/config
+COPY config/ /app/config/
+RUN chown -R aiserver:aiserver /app/config
 
 # Set executable permissions
 RUN chmod +x /app/ai-inference-server
