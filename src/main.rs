@@ -28,6 +28,7 @@ use ai_interence_server::api::vectors_enhanced::create_enhanced_vector_router;
 use ai_interence_server::api::embedding::{create_embedding_router, create_embedding_service_with_model};
 use ai_interence_server::api::search::{create_search_router, SearchSessionManager};
 use ai_interence_server::api::document_processing::{create_document_processing_router, DocumentProcessingApiState};
+use ai_interence_server::api::memory_monitor::create_memory_monitor_router;
 use ai_interence_server::batching::{BatchConfig, BatchProcessor};
 use ai_interence_server::vector::{VectorStorageFactory, EmbeddingConfig};
 use ai_interence_server::models::{ModelVersionManager, AtomicModelSwap, version_manager::ModelStatus, initialize_models};
@@ -153,11 +154,11 @@ async fn main() -> anyhow::Result<()> {
         if let Some(version) = version_manager.get_model_version(&model_id).await {
             match version.status {
                 ModelStatus::Loading => {
-                    if attempts < 30 { // Wait up to 60 seconds
-                        tracing::info!("Model still loading, attempt {}/30...", attempts);
+                    if attempts < 150 { // Wait up to 300 seconds (5 minutes) for first-time download
+                        tracing::info!("Model still loading, attempt {}/150... (this may take longer for first-time downloads)", attempts);
                         continue;
                     } else {
-                        return Err(anyhow::anyhow!("Model loading timeout after 60 seconds"));
+                        return Err(anyhow::anyhow!("Model loading timeout after 300 seconds"));
                     }
                 }
                 ModelStatus::Failed(ref err) => {
@@ -231,12 +232,16 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("✅ Vector API router configured with {} backend", 
                    vector_backend.backend_type());
 
-    // EMBEDDING SERVICE: Text-to-Vector Conversion Pipeline
+    // EMBEDDING SERVICE: Text-to-Vector Conversion Pipeline with Memory Management
     tracing::info!("🧠 Initializing embedding service with model integration...");
     let embedding_config = EmbeddingConfig {
         dimension: 64,
         use_model_embeddings: true,
-        cache_size: 1000,
+        // MEMORY MANAGEMENT: Configurable cache size to prevent unbounded growth
+        cache_size: std::env::var("EMBEDDING_CACHE_SIZE")
+            .unwrap_or_else(|_| "500".to_string())
+            .parse()
+            .unwrap_or(500), // Reduced from 1000 to 500 for memory efficiency
         batch_size: 10,
     };
     
@@ -266,6 +271,11 @@ async fn main() -> anyhow::Result<()> {
     let document_processing_state = DocumentProcessingApiState::new();
     let document_router = create_document_processing_router().with_state(document_processing_state.clone());
     tracing::info!("✅ Document processing API initialized with ingestion, chunking, and deduplication");
+
+    // MEMORY MONITORING API: Production Memory Leak Detection
+    tracing::info!("🧠 Initializing memory monitoring and leak detection...");
+    let memory_monitor_router = create_memory_monitor_router();
+    tracing::info!("✅ Memory monitoring API initialized for production health tracking");
 
     // ARCHITECTURE: Modular Router Design with State Separation
     // Implements clean separation of concerns via dedicated router modules:
@@ -327,6 +337,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(embedding_router)
         .merge(search_router)
         .merge(document_router)
+        .merge(memory_monitor_router)
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -384,6 +395,10 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("    • POST /api/v1/documents/deduplicate - Run global deduplication");
     tracing::info!("    • GET  /api/v1/documents/duplicates - Find duplicate candidates");
     tracing::info!("    • GET  /api/v1/documents/stats - Document processing statistics");
+    tracing::info!("  🔷 MEMORY MONITORING:");
+    tracing::info!("    • GET  /api/v1/memory/stats - Comprehensive memory usage statistics");
+    tracing::info!("    • GET  /api/v1/memory/cleanup - Trigger manual memory cleanup");
+    tracing::info!("    • GET  /api/v1/memory/health - Memory health assessment and recommendations");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let server = axum::serve(listener, app);

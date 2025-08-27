@@ -353,18 +353,23 @@ impl EmbeddingService {
         self.cache.read().await.get(key).cloned()
     }
 
-    /// Cache embedding result
+    /// Cache embedding result with memory-safe eviction
     async fn cache_embedding(&self, key: String, vector: Vec<f32>) {
         let mut cache = self.cache.write().await;
         
-        // Simple LRU: remove oldest if cache is full
-        if cache.len() >= self.config.cache_size {
+        // Aggressive memory management: evict multiple entries when approaching limit
+        while cache.len() >= (self.config.cache_size * 90 / 100) { // Start evicting at 90% capacity
             if let Some(first_key) = cache.keys().next().cloned() {
                 cache.remove(&first_key);
+            } else {
+                break;
             }
         }
         
-        cache.insert(key, vector);
+        // Only cache if vector size is reasonable (prevent memory bombs)
+        if vector.len() <= 2048 { // Limit vector dimension to prevent large allocations
+            cache.insert(key, vector);
+        }
     }
 
     /// Update service statistics

@@ -271,9 +271,59 @@ pub struct QueryHistoryEntry {
 
 impl SearchSessionManager {
     pub fn new() -> Self {
-        Self {
+        let manager = Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-        }
+        };
+        
+        // Start background cleanup task to prevent memory leaks
+        manager.start_cleanup_task();
+        manager
+    }
+
+    /// Start background task to clean up expired sessions
+    fn start_cleanup_task(&self) {
+        let sessions = Arc::clone(&self.sessions);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300)); // 5 minutes
+            
+            loop {
+                interval.tick().await;
+                
+                let mut sessions_lock = sessions.write().await;
+                let now = chrono::Utc::now();
+                let mut to_remove = Vec::new();
+                
+                // Find sessions older than 24 hours with no recent activity
+                for (session_id, session) in sessions_lock.iter() {
+                    let age = now.signed_duration_since(session.last_activity);
+                    if age.num_hours() > 24 {
+                        to_remove.push(session_id.clone());
+                    }
+                }
+                
+                // Remove expired sessions
+                for session_id in to_remove {
+                    sessions_lock.remove(&session_id);
+                    tracing::debug!("🧹 Cleaned up expired search session: {}", session_id);
+                }
+                
+                // Limit total sessions to prevent unbounded growth
+                while sessions_lock.len() > 1000 {
+                    // Remove oldest session
+                    if let Some((oldest_id, _)) = sessions_lock.iter()
+                        .min_by_key(|(_, session)| session.last_activity)
+                        .map(|(id, session)| (id.clone(), session.clone()))
+                    {
+                        sessions_lock.remove(&oldest_id);
+                        tracing::debug!("🧹 Evicted oldest session due to limit: {}", oldest_id);
+                    } else {
+                        break;
+                    }
+                }
+                
+                tracing::debug!("🧹 Session cleanup: {} active sessions", sessions_lock.len());
+            }
+        });
     }
 
     /// Get or create session

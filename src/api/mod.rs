@@ -41,3 +41,4 @@ pub mod embedding;       // Text-to-vector embedding API - semantic processing
 pub mod search;          // Dedicated semantic search API - session-aware intelligent search
 pub mod index_management; // Index optimization and performance management - Day 9 implementation
 pub mod document_processing; // Document processing pipeline - Day 10 implementation
+pub mod memory_monitor;  // Memory monitoring and leak detection - production memory management

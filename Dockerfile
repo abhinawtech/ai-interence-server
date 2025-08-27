@@ -114,14 +114,14 @@ WORKDIR /app
 # Copy the built binary from builder stage
 COPY --from=builder /tmp/target/release/ai-interence-server /app/ai-inference-server
 
-# Copy configuration files if they exist
-COPY --chown=aiserver:aiserver config/ /app/config/ 2>/dev/null || :
+# Copy configuration files if they exist (optional)
+COPY --chown=aiserver:aiserver config/ /app/config/ || echo "No config directory found, skipping..."
 
 # Set executable permissions
 RUN chmod +x /app/ai-inference-server
 
-# Create volume mount points
-VOLUME ["/app/models", "/app/logs", "/app/data"]
+# Volume mount points will be configured in Railway dashboard
+# Railway volumes: https://docs.railway.com/reference/volumes
 
 # ================================================================================================
 # SECURITY AND USER CONFIGURATION

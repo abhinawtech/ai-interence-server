@@ -1,0 +1,15 @@
+# Railway Nixpacks configuration for Rust
+[phases.build]
+dependsOn = ["setup"]
+cmds = ["cargo build --release"]
+
+[phases.setup]
+nixPkgs = ["rustc", "cargo", "pkg-config", "openssl"]
+
+[start]
+cmd = "./target/release/ai-interence-server"
+
+[variables]
+PORT = "3000"
+RUST_LOG = "info"
+TOKENIZERS_PARALLELISM = "false"

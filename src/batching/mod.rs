@@ -183,13 +183,14 @@ impl BatchProcessor {
         }
     }
 
-    /// Start with batch processing loop
+    /// Start with batch processing loop with memory management
     pub async fn start_processing_loop(self: Arc<Self>) {
         tracing::info!(
             "Starting batch processing loop with config: {:?}",
             self.config
         );
 
+        let mut loop_counter = 0u64;
         loop {
             let batch = self.collect_batch().await;
 
@@ -198,6 +199,19 @@ impl BatchProcessor {
                 self.process_batch(batch).await;
             } else {
                 tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+
+            // Periodic memory cleanup and yielding
+            loop_counter += 1;
+            if loop_counter % 1000 == 0 {
+                // Force a yield every 1000 iterations to prevent memory buildup
+                tokio::task::yield_now().await;
+                
+                // Log memory usage periodically
+                if loop_counter % 10000 == 0 {
+                    let queue_size = self.get_queue_size().await;
+                    tracing::debug!("Batch processor health: queue_size={}, loop_iterations={}", queue_size, loop_counter);
+                }
             }
         }
     }

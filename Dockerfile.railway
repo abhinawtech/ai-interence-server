@@ -1,0 +1,37 @@
+# ================================================================================================
+# ULTRA-SIMPLE DOCKERFILE FOR RAILWAY
+# ================================================================================================
+
+FROM rust:1.80-slim
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy all files
+COPY . .
+
+# Build application
+RUN cargo build --release
+
+# Set environment
+ENV HOST=0.0.0.0
+ENV PORT=3000
+ENV RUST_LOG=info
+ENV TOKENIZERS_PARALLELISM=false
+ENV RAYON_NUM_THREADS=2
+ENV EMBEDDING_CACHE_SIZE=200
+
+# Expose port
+EXPOSE 3000
+
+# Run
+CMD ["./target/release/ai-interence-server"]
