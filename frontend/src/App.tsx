@@ -135,7 +135,8 @@ function App() {
 
       const endpoint = shouldUseUploadEndpoint ? '/api/v1/generate/upload' : '/api/v1/generate'
 
-      const response = await fetch(`http://localhost:3000${endpoint}`, requestInit)
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000'
+      const response = await fetch(`${apiBaseUrl}${endpoint}`, requestInit)
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`)
@@ -171,11 +172,7 @@ function App() {
 
     } catch (error) {
       console.error('Error sending message:', error)
-      console.error('Error details:', {
-        endpoint,
-        requestInit,
-        error: error instanceof Error ? error.message : String(error)
-      })
+      console.error('Error details:', error instanceof Error ? error.message : String(error))
       
       let errorContent = 'Failed to send message'
       if (error instanceof Error) {
