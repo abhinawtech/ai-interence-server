@@ -155,9 +155,9 @@ pub async fn generate_text(
         if needs_model_switch {
             tracing::info!("🔄 Loading and switching to model: {}", model_name);
             
-            // Load the model if not already loaded
+            // Load the model if not already loaded (reuse existing if available)
             let model_id = model_manager
-                .load_model_version(model_name.clone(), "main".to_string(), None)
+                .load_or_get_model(model_name)
                 .await
                 .map_err(|e| AppError::BadRequest(format!("Failed to load model {}: {}", model_name, e)))?;
             
@@ -810,9 +810,9 @@ pub async fn generate_with_file_upload(
         if needs_model_switch {
             tracing::info!("🔄 File upload - Loading and switching to model: {}", model);
             
-            // Load the model if not already loaded
+            // Load the model if not already loaded (reuse existing if available)
             let model_id = model_manager
-                .load_model_version(model.clone(), "main".to_string(), None)
+                .load_or_get_model(&model)
                 .await
                 .map_err(|e| AppError::BadRequest(format!("Failed to load model {}: {}", model, e)))?;
             

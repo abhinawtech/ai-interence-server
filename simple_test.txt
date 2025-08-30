@@ -1,3 +1,0 @@
-This is a simple test document.
-It contains basic text for testing file upload functionality.
-The document should be processed correctly by the AI server.

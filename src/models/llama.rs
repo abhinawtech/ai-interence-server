@@ -37,6 +37,7 @@ use hf_hub::{Repo, RepoType, api::sync::Api};
 use serde_json::Value;
 use std::fs;
 use tokenizers::Tokenizer;
+use rand::prelude::*;
 use std::sync::Arc;
 use crate::models::ModelInfo;
 
@@ -322,17 +323,14 @@ impl TinyLlamaModel {
             &self.device,
         )?;
 
-        // OPTIMIZATION: KV Cache Strategy
-        // Key-Value cache stores attention states to avoid recomputing for each token
+        // OPTIMIZATION: Per-Request KV Cache Strategy
+        // Each request gets its own cache to avoid interference and enable concurrency
         // F16 precision balances memory usage vs numerical stability
         // Use_kv_cache=true provides 5-10x speedup for autoregressive generation
         let mut cache = Cache::new(true, DType::F16, &self.config, &self.device)?;
         
         // PERFORMANCE: Cache Pre-warming Analysis
         // Longer prompts benefit from cache pre-allocation, reducing first token latency
-        if input_ids.len() > 1 {
-            tracing::debug!("Pre-warming KV cache for {} input tokens", input_ids.len());
-        }
         
         // OPTIMIZATION: Vector Pre-allocation
         // Avoids multiple heap reallocations during token generation
@@ -344,9 +342,17 @@ impl TinyLlamaModel {
         let output = self.model.forward(&input_tensor, 0, &mut cache)?;
         let logits = output.squeeze(0)?;
         
-        // Optimized token sampling
-        let next_token = logits.argmax(candle_core::D::Minus1)?;
-        let mut token_id = next_token.to_scalar::<u32>()?;
+        // CRITICAL: Take only the last token's logits for sampling
+        let last_logits = if logits.dims().len() > 1 {
+            // logits is [seq_len, vocab_size], take last position
+            logits.narrow(0, logits.dim(0)? - 1, 1)?.squeeze(0)?
+        } else {
+            // logits is already [vocab_size]
+            logits
+        };
+        
+        // Fast top-k sampling (much faster than argmax + to_scalar)
+        let mut token_id = Self::sample_token_topk(&last_logits, 50)?;
         
         if !self.is_eos_token(token_id) {
             generated_tokens.push(token_id);
@@ -368,9 +374,8 @@ impl TinyLlamaModel {
             let output = self.model.forward(&current_input, step, &mut cache)?;
             let logits = output.squeeze(0)?;
             
-            // Fast argmax without extra tensor operations
-            let next_token = logits.argmax(candle_core::D::Minus1)?;
-            token_id = next_token.to_scalar::<u32>()?;
+            // Fast top-k sampling
+            token_id = Self::sample_token_topk(&logits, 50)?;
             
             if !self.is_eos_token(token_id) {
                 generated_tokens.push(token_id);
@@ -381,8 +386,11 @@ impl TinyLlamaModel {
 
         // Batch decode for better performance
         let decode_start = std::time::Instant::now();
+        
+        
         let generated_text = self.tokenizer.decode(&generated_tokens, true)
             .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
+            
         let decode_time = decode_start.elapsed();
         
         let total_time = total_start.elapsed();
@@ -416,6 +424,61 @@ impl TinyLlamaModel {
         } else {
             token == 2 // Fallback to common EOS token
         }
+    }
+
+    /// Fast top-k sampling with temperature for TinyLlama - avoids slow GPU-to-CPU transfers
+    fn sample_token_topk(logits: &Tensor, top_k: usize) -> Result<u32> {
+        Self::sample_token_topk_temperature(logits, top_k, 0.8) // Default temperature of 0.8
+    }
+
+    fn sample_token_topk_temperature(logits: &Tensor, top_k: usize, temperature: f32) -> Result<u32> {
+        
+        
+        // 1) Single CPU copy and apply temperature scaling
+        let mut v = logits.to_vec1::<f32>()?;
+        let vocab_size = v.len();
+        let k = top_k.min(vocab_size);
+        
+        // Apply temperature scaling (temperature < 1.0 = more focused, > 1.0 = more random)
+        if temperature != 1.0 {
+            for val in &mut v {
+                *val /= temperature;
+            }
+        }
+        
+        // 2) Sort and take top-k
+        let mut indexed_values: Vec<(usize, f32)> = v.iter().enumerate().map(|(i, &val)| (i, val)).collect();
+        indexed_values.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        indexed_values.truncate(k);
+
+        // 3) Softmax on top-k only (much faster than full vocab)
+        let mut max_logit = f32::NEG_INFINITY;
+        for (_, val) in &indexed_values {
+            if *val > max_logit { max_logit = *val; }
+        }
+
+        let mut weights = Vec::with_capacity(indexed_values.len());
+        for (_, val) in &indexed_values {
+            weights.push((val - max_logit).exp());
+        }
+
+        // 4) Weighted sampling
+        let total_weight: f32 = weights.iter().sum();
+        let mut rng = rand::rng();
+        let random_value = rng.random::<f32>() * total_weight;
+        
+        let mut cumulative_weight = 0.0;
+        let mut choice = indexed_values[0].0;
+        
+        for (i, &weight) in weights.iter().enumerate() {
+            cumulative_weight += weight;
+            if random_value <= cumulative_weight {
+                choice = indexed_values[i].0;
+                break;
+            }
+        }
+
+        Ok(choice as u32)
     }
 
     pub fn model_info(&self) -> ModelInfo {

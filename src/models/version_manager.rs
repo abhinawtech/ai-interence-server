@@ -608,6 +608,58 @@ pub async fn get_model_version(&self, model_id: &str)-> Option<ModelVersion>{
     versions.get(model_id).cloned()
 }
 
+/// Find existing model by name (case-insensitive) and return its ID if Ready/Active
+pub async fn find_model_by_name(&self, name: &str) -> Option<String> {
+    let versions = self.versions.read().await;
+    let name_lower = name.to_lowercase();
+    
+    tracing::info!("🔍 [ModelManager] Scanning {} loaded models for name: '{}'", versions.len(), name);
+    
+    for (model_id, version) in versions.iter() {
+        tracing::debug!("🔎 [ModelManager] Checking model ID '{}', name '{}', status: {:?}", 
+                       model_id, version.name, version.status);
+        
+        // Check if model name matches (case-insensitive)
+        if version.name.to_lowercase() == name_lower || 
+           version.name.to_lowercase().contains(&name_lower) ||
+           name_lower.contains(&version.name.to_lowercase()) {
+            
+            tracing::info!("🎯 [ModelManager] Name match found: '{}' vs '{}'", name, version.name);
+            
+            // Only return if model is Ready or Active
+            match &version.status {
+                ModelStatus::Ready | ModelStatus::Active => {
+                    tracing::info!("✅ [ModelManager] Found existing READY model '{}' with ID: {}", name, model_id);
+                    return Some(model_id.clone());
+                },
+                status => {
+                    tracing::warn!("⚠️ [ModelManager] Found model '{}' but status is {:?}, not Ready/Active", name, status);
+                    continue;
+                }
+            }
+        }
+    }
+    
+    tracing::info!("❌ [ModelManager] No existing Ready/Active model found for name: '{}'", name);
+    None
+}
+
+/// Load model by name, reusing existing instance if available
+pub async fn load_or_get_model(&self, name: &str) -> Result<String> {
+    tracing::info!("🔍 [ModelManager] load_or_get_model called for: '{}'", name);
+    
+    // First check if model already exists and is ready/active
+    tracing::info!("🔎 [ModelManager] Searching for existing model with name: '{}'", name);
+    if let Some(existing_id) = self.find_model_by_name(name).await {
+        tracing::info!("♻️ [ModelManager] REUSING existing model '{}' with ID: {} (CACHE HIT)", name, existing_id);
+        return Ok(existing_id);
+    }
+    
+    // If no existing model found, load a new one
+    tracing::info!("📥 [ModelManager] No existing model found, loading NEW instance for: '{}' (CACHE MISS)", name);
+    self.load_model_version(name.to_string(), "main".to_string(), None).await
+}
+
 /// Remove a model version (Cleanup)
 pub async fn remove_model(&self, model_id: &str)-> Result<()>{
     tracing::info!("Removing model: {}", model_id);

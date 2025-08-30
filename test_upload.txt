@@ -1,3 +1,0 @@
-This is a test document for upload testing.
-It contains multiple lines to test document processing.
-The content should be processed correctly by the server.

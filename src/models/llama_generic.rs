@@ -22,40 +22,26 @@ use candle_transformers::models::llama as llama_mod;
 use llama_mod::{Config as LlamaConfig, Llama, Cache as LlamaCache};
 use hf_hub::{api::tokio::{Api, ApiBuilder}, Repo, RepoType};
 use std::{env, sync::Arc};
-use tokio::sync::Mutex;
 use tokenizers::Tokenizer;
 use crate::models::traits::{ModelTrait, ModelInfo, BoxedModel};
 use async_trait::async_trait;
 
-/// Generic Llama Model - Flexible Multi-Model Support
+// Data structure for model loading (no cache stored)
+#[derive(Debug)]
+struct LlamaModelData {
+    model: Llama,
+    dtype: DType,
+}
+
+/// Generic Llama Model - Flexible Multi-Model Support (Lock-Free Design)
 #[derive(Debug)]
 pub struct GenericLlamaModel {
-    model: Arc<Mutex<LlamaModelWrapper>>,
+    model: Arc<Llama>,  // Remove mutex - model is immutable after loading
     tokenizer: Arc<Tokenizer>,
     pub device: Device,
     config: LlamaConfig,
     repo_name: String,
-}
-
-// Wrapper for Llama model with its cache
-#[derive(Debug)]
-struct LlamaModelWrapper {
-    model: Llama,
-    cache: LlamaCache,
-    config: LlamaConfig,
-    dtype: DType,
-}
-
-impl LlamaModelWrapper {
-    fn forward(&mut self, input: &Tensor, seq_offset: usize) -> Result<Tensor> {
-        self.model.forward(input, seq_offset, &mut self.cache)
-            .map_err(|e| anyhow::anyhow!("Llama forward error: {}", e))
-    }
-    
-    fn reset_cache(&mut self, device: &Device) -> Result<()> {
-        self.cache = LlamaCache::new(true, self.dtype, &self.config, device)?;
-        Ok(())
-    }
+    dtype: DType,  // Store dtype for cache creation
 }
 
 impl GenericLlamaModel {
@@ -71,11 +57,12 @@ impl GenericLlamaModel {
 
         tracing::info!("✅ Generic Llama model loaded successfully: {}", repo_name);
         Ok(Self {
-            model: Arc::new(Mutex::new(model)),
+            model: Arc::new(model.model),  // Extract model from wrapper
             tokenizer: Arc::new(tokenizer),
             device,
             config,
             repo_name: repo_name.to_string(),
+            dtype: model.dtype,  // Store dtype for per-request cache creation
         })
     }
 
@@ -122,7 +109,7 @@ impl GenericLlamaModel {
         }
     }
 
-    async fn load_model(device: &Device, repo_str: &str) -> Result<(LlamaModelWrapper, Tokenizer, LlamaConfig)> {
+    async fn load_model(device: &Device, repo_str: &str) -> Result<(LlamaModelData, Tokenizer, LlamaConfig)> {
         // Check for HF_TOKEN environment variable
         let _token = env::var("HF_TOKEN").map_err(|_| {
             anyhow::anyhow!(
@@ -186,11 +173,10 @@ impl GenericLlamaModel {
         tracing::info!("✅ VarBuilder created from safetensors");
 
         let model = Llama::load(vb, &config)?;
-        let cache = LlamaCache::new(true, chosen_dtype, &config, device)?;
         tracing::info!("✅ Llama model built successfully");
 
         Ok((
-            LlamaModelWrapper { model, cache, config: config.clone(), dtype: chosen_dtype }, 
+            LlamaModelData { model, dtype: chosen_dtype }, 
             tokenizer, 
             config
         ))
@@ -268,21 +254,27 @@ impl GenericLlamaModel {
     pub async fn generate(&mut self, prompt: &str, max_tokens: usize) -> Result<String> {
         let total_start = std::time::Instant::now();
         
+        // Format prompt for better response quality
+        let formatted_prompt = if self.repo_name.contains("Llama-3") {
+            // For Llama-3.2-1B base model, add instructional context
+            format!("Question: {}\nAnswer:", prompt)
+        } else {
+            // For other models, use original prompt
+            prompt.to_string()
+        };
+        
         // Tokenize input
         let tokenize_start = std::time::Instant::now();
-        let tokens = self.tokenizer.encode(prompt, true).map_err(E::msg)?;
+        let tokens = self.tokenizer.encode(formatted_prompt, true).map_err(E::msg)?;
         let token_ids = tokens.get_ids().iter().map(|&id| id as u32).collect::<Vec<_>>();
         let tokenize_time = tokenize_start.elapsed();
         
-        tracing::debug!("✅ Input tokenized: {} tokens", token_ids.len());
 
-        // Generate text using incremental approach
+        // OPTIMIZATION: Create per-request cache (no locking needed)
         let generation_start = std::time::Instant::now();
-        let mut model = self.model.lock().await;
-        model.reset_cache(&self.device)?;
+        let mut cache = LlamaCache::new(true, self.dtype, &self.config, &self.device)?;
         
-        let generated_text = self.greedy_decode_incremental(&mut *model, &token_ids, max_tokens)?;
-        drop(model); // Release lock early
+        let generated_text = self.greedy_decode_incremental(&token_ids, max_tokens, &mut cache)?;
         
         let generation_time = generation_start.elapsed();
         let total_time = total_start.elapsed();
@@ -305,17 +297,17 @@ impl GenericLlamaModel {
 
     fn greedy_decode_incremental(
         &self,
-        lm: &mut LlamaModelWrapper,
         input_ids: &[u32],
         max_new_tokens: usize,
+        cache: &mut LlamaCache,
     ) -> Result<String> {
         // First pass with the whole prompt at offset 0
         let mut ctx_len = input_ids.len();
         let mut generated = Vec::<u32>::new();
 
         let input = Tensor::from_vec(input_ids.to_vec(), (1, ctx_len), &self.device)?;
-        // Warm up cache with prompt
-        let _ = lm.forward(&input, 0)?;
+        // Warm up cache with prompt - direct model access, no locking
+        let _ = self.model.forward(&input, 0, cache)?;
 
         for _step in 0..max_new_tokens {
             // Feed only the previous generated token (or last prompt token on first step)
@@ -326,8 +318,8 @@ impl GenericLlamaModel {
             };
             let t = Tensor::from_vec(vec![last_tok], (1, 1), &self.device)?;
 
-            // Forward with current context length as offset
-            let logits = lm.forward(&t, ctx_len)?;
+            // Forward with current context length as offset - direct model access
+            let logits = self.model.forward(&t, ctx_len, cache)?;
             ctx_len += 1;
 
             // Handle different logits shapes
@@ -346,13 +338,11 @@ impl GenericLlamaModel {
             let next_id = self.sample_with_temperature(&last_logits, 0.8, 0.7)?;
 
             if self.is_eos_token(next_id) { 
-                tracing::debug!("🏁 Hit EOS token, stopping generation");
                 break; 
             }
 
             // Check for repetition patterns to improve quality
             if self.detect_repetition(&generated, next_id)? {
-                tracing::debug!("🔄 Repetition detected, stopping generation");
                 break;
             }
 

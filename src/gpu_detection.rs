@@ -56,19 +56,15 @@ pub fn detect_gpu_backend() -> GpuBackend {
 
     // Auto-detection logic
     #[cfg(feature = "cuda")]
-    {
-        if is_cuda_available() {
-            info!("🚀 NVIDIA GPU detected - using CUDA backend");
-            return GpuBackend::Cuda;
-        }
+    if is_cuda_available() {
+        info!("🚀 NVIDIA GPU detected - using CUDA backend");
+        return GpuBackend::Cuda;
     }
 
     #[cfg(feature = "metal")]
-    {
-        if is_metal_available() {
-            info!("🚀 Apple Silicon detected - using Metal backend");
-            return GpuBackend::Metal;
-        }
+    if is_metal_available() {
+        info!("🚀 Apple Silicon detected - using Metal backend");
+        return GpuBackend::Metal;
     }
 
     info!("💾 No GPU detected - using optimized CPU backend");
@@ -77,6 +73,7 @@ pub fn detect_gpu_backend() -> GpuBackend {
 
 /// Check if CUDA is available
 #[cfg(feature = "cuda")]
+#[allow(dead_code)]
 fn is_cuda_available() -> bool {
     // Try to query CUDA devices
     match std::process::Command::new("nvidia-smi").output() {
@@ -108,12 +105,14 @@ fn is_cuda_available() -> bool {
 }
 
 #[cfg(not(feature = "cuda"))]
+#[allow(dead_code)]
 fn is_cuda_available() -> bool {
     false
 }
 
 /// Check if Metal is available (Apple Silicon)
 #[cfg(feature = "metal")]
+#[allow(dead_code)]
 fn is_metal_available() -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -143,6 +142,7 @@ fn is_metal_available() -> bool {
 }
 
 #[cfg(not(feature = "metal"))]
+#[allow(dead_code)]
 fn is_metal_available() -> bool {
     false
 }

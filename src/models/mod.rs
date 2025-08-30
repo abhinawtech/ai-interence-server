@@ -1,5 +1,6 @@
 pub mod llama;
 pub mod llama_generic;
+pub mod llama2_7b_chat;
 pub mod codellama;
 pub mod deepseek_coder;
 pub mod version_manager;
@@ -13,6 +14,7 @@ pub mod registry;
 
 pub use llama::{TinyLlamaModel};
 pub use llama_generic::GenericLlamaModel;
+pub use llama2_7b_chat::Llama2ChatModel;
 pub use codellama::CodeLlamaModel;
 pub use deepseek_coder::DeepSeekCoderModel;
 pub use phi3::Phi3Model;
@@ -105,6 +107,11 @@ pub fn initialize_models() -> Result<()> {
     // Register Generic Llama for flexible model loading
     if let Err(e) = llama_generic::register_generic_llama_model() {
         tracing::warn!("Failed to register Generic Llama model: {}", e);
+    }
+    
+    // Register Llama-2-7B-Chat for conversational AI
+    if let Err(e) = llama2_7b_chat::register_llama2_chat_model() {
+        tracing::warn!("Failed to register Llama-2-7B-Chat model: {}", e);
     }
     
     // Register DeepSeek Coder for specialized code generation
