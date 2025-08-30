@@ -1,53 +1,56 @@
-# AI Inference Server
+---
+title: AI Inference Server
+emoji: 🤖
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_port: 3000
+pinned: false
+license: mit
+---
 
-A high-performance AI inference server built with Rust, using Candle for ML operations and Axum for HTTP serving.
+# 🚀 AI Inference Server
 
-## Features
+A high-performance AI inference server built with Rust and Candle framework, optimized for concurrent model inference with enterprise-grade features.
 
-- **Fast HTTP API** using Axum web framework
-- **Async processing** with Tokio runtime
-- **ML inference** powered by Candle
-- **Text generation** with transformer models
-- **Token management** with HuggingFace tokenizers
-- **Model caching** for improved performance
-- **Health monitoring** and observability
-- **Configurable** via environment variables
+## ✨ Features
 
-## Prerequisites
+- **Multi-Model Support**: TinyLlama, Llama-2, Generic Llama, Phi-3, Gemma
+- **High Performance**: 10-14 tokens/second on optimized hardware
+- **Concurrent Inference**: Lock-free architecture for multiple simultaneous requests
+- **Vector Database**: Qdrant integration for semantic search and RAG
+- **Fast Sampling**: Optimized top-k sampling with temperature control
+- **Memory Efficient**: Per-request cache management
+- **Production Ready**: Health checks, monitoring, and failover capabilities
 
-- Rust 1.70+ with Cargo
-- CUDA (optional, for GPU acceleration)
+## 🚀 Quick Start
 
-## Setup Instructions
+### API Endpoints
 
-### 1. Clone and Build
-
+#### Text Generation
 ```bash
-git clone <repository-url>
-cd ai-inference-server
-cargo build --release
+curl -X POST https://your-space.hf.space/api/v1/generate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Hello, world!", "model": "tinyllama"}'
 ```
 
-### 2. Configuration
-
-Set environment variables or use defaults:
-
+#### Model Selection
 ```bash
-# Server configuration
-export HOST=0.0.0.0
-export PORT=8080
-export LOG_LEVEL=info
+# TinyLlama (fast, 1.1B params)
+curl -X POST https://your-space.hf.space/api/v1/generate \
+  -d '{"prompt": "Explain AI", "model": "tinyllama"}'
 
-# Model configuration
-export MODEL_CACHE_DIR=./models
-export MAX_CONCURRENT_REQUESTS=10
-export DEFAULT_MODEL=microsoft/DialoGPT-medium
+# Generic Llama (flexible)
+curl -X POST https://your-space.hf.space/api/v1/generate \
+  -d '{"prompt": "What is Rust?", "model": "llama-generic"}'
 ```
 
-### 3. Run the Server
-
+#### File Upload Generation
 ```bash
-cargo run --release
+curl -X POST https://your-space.hf.space/api/v1/generate/upload \
+  -F "file=@document.txt" \
+  -F "prompt=Summarize this document" \
+  -F "model=tinyllama"
 ```
 
 ## API Endpoints
