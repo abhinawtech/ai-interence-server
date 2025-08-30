@@ -280,7 +280,8 @@ function App() {
               onChange={(e) => setSelectedModel(e.target.value)}
               className="w-full chat-input text-sm"
             >
-              <option value="tinyllama">TinyLlama (Recommended)</option>
+              <option value="llama2">Llama-2-7B-Chat (Recommended)</option>
+              <option value="tinyllama">TinyLlama </option>
               <option value="llama-generic">Llama Generic</option>
             </select>
           </div>
